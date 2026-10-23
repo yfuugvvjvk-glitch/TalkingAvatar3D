@@ -154,10 +154,14 @@ namespace ollama
 
             await PostRequestStream(payload, Endpoints.CHAT, (Response.Chat response) =>
             {
-                if (!response.done)
+                if (!response.done && response.message != null)
                 {
-                    onTextReceived?.Invoke(response.message.content);
-                    reply.Append(response.message.content);
+                    string content = response.message.content ?? string.Empty;
+                    if (!string.IsNullOrEmpty(content))
+                    {
+                        onTextReceived?.Invoke(content);
+                        reply.Append(content);
+                    }
                 }
             });
 

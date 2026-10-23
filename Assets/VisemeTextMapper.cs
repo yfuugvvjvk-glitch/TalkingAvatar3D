@@ -308,7 +308,6 @@ public static class VisemeTextMapper
         { "something", new[]{"s","ah","m","th","ih","ng"}},
         { "nothing",  new[]{"n","ah","th","ih","ng"}},
         { "anything", new[]{"eh","n","ee","th","ih","ng"}},
-        { "everything",new[]{"eh","v","r","ee","th","ih","ng"}},
         { "language", new[]{"l","ae","ng","g","w","ih","j"}},
         { "avatar",   new[]{"ae","v","uh","t","ah","r"}},
         { "computer", new[]{"k","uh","m","p","y","oo","t","er"}},

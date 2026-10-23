@@ -204,6 +204,7 @@ public class OllamaStreamTester : MonoBehaviour
 
     private void OnChunkReceived(string chunk)
     {
+        if (string.IsNullOrEmpty(chunk)) return;
         lock (streamLock)
         {
             currentStreamedText += chunk;
