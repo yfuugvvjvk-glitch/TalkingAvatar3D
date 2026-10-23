@@ -190,6 +190,24 @@ public class AvatarVisemeAnimator : MonoBehaviour
                 Time.deltaTime * 3f);
         }
 
+        // ── Brațe idle — coborâte natural (nu T-pose) ────────────────────
+        if (!walkActive && !waveActive && !pushUpActive)
+        {
+            // Rotim brațele în jos cu ~25 grade față de T-pose pentru o postură naturală
+            // și adăugăm o respirație subtilă
+            float breathArm = Mathf.Sin(elapsed * 0.8f) * 1.5f;
+            if (leftArmBone != null)
+                leftArmBone.localRotation = Quaternion.Slerp(
+                    leftArmBone.localRotation,
+                    leftArmRestRot * Quaternion.Euler(breathArm, 0f, 8f),  // 8° spre corp
+                    Time.deltaTime * 3f);
+            if (rightArmBone != null)
+                rightArmBone.localRotation = Quaternion.Slerp(
+                    rightArmBone.localRotation,
+                    rightArmRestRot * Quaternion.Euler(breathArm, 0f, -8f), // -8° spre corp
+                    Time.deltaTime * 3f);
+        }
+
         // ── Bob vertical ușor ─────────────────────────────────────────────
         if (avatarRoot != null && !walkActive && !pushUpActive)
         {
