@@ -467,12 +467,12 @@ public static class VisemeTextMapper
                     case "mb":
                         // b mut la final (lamb, bomb)
                         if (i + 2 >= word.Length) { units.Add("m"); i += 2; continue; }
-                        goto default;
+                        break; // altfel tratam literele separat
                     case "kn": units.Add("n");  i += 2; continue;  // knife → n
                     case "wr": units.Add("r");  i += 2; continue;  // write → r
                     case "gn":
                         if (i == 0) { units.Add("n"); i += 2; continue; } // gnat
-                        goto default;
+                        break; // altfel tratam literele separat
                     case "qu": units.Add("k"); units.Add("w"); i += 2; continue; // queen
                     case "oo": units.Add("oo"); i += 2; continue;
                     case "ee": units.Add("ee"); i += 2; continue;
@@ -487,6 +487,7 @@ public static class VisemeTextMapper
                     case "oi": units.Add("oy"); i += 2; continue;
                     case "oy": units.Add("oy"); i += 2; continue;
                     case "ai":
+                        units.Add("ay"); i += 2; continue;
                     case "ay": units.Add("ay"); i += 2; continue;
                     case "ey": units.Add("ay"); i += 2; continue;  // they, hey
                     case "ie":
@@ -595,7 +596,7 @@ public static class VisemeTextMapper
             // ── Pauze ─────────────────────────────────────────────────────
             case " ": case "\t": case "\n": case "\r":
             case ".": case "!": case "?": case ",": case ";": case ":":
-            case "-": case "—": case "\"": case "'":
+            case "-": case "\u2014": case "\"": case "'":
                 return AvatarViseme.Rest;
 
             default:

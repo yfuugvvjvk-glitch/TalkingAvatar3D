@@ -124,7 +124,7 @@ if %errorlevel% neq 0 (
 echo       Dependente OK
 
 echo       Pornesc serverul TTS...
-start "TTS Server" /min cmd /k "%PY_CMD% \"%TTS_DIR%\tts_server.py\""
+start "TTS Server" /min cmd /k "%PY_CMD% "%TTS_DIR%\tts_server.py""
 
 REM Asteptam TTS cu retry
 echo       Astept serverul TTS...
