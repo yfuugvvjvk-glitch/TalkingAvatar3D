@@ -697,21 +697,35 @@ public class AvatarVisemeAnimator : MonoBehaviour
         Transform[] transforms = GetComponentsInChildren<Transform>(true);
         foreach (Transform candidate in transforms)
         {
-            switch (candidate.name)
+            // Stripuim prefixul namespace (ex: "mixamorig:LeftUpLeg" → "LeftUpLeg")
+            string boneName = candidate.name;
+            int separator = boneName.LastIndexOf(':');
+            if (separator >= 0)
+                boneName = boneName.Substring(separator + 1);
+
+            switch (boneName)
             {
                 case "LeftUpLeg":
+                case "LeftThigh":
+                case "L_Thigh":
                     leftLegBone = candidate;
                     leftLegRestRotation = candidate.localRotation;
                     break;
                 case "RightUpLeg":
+                case "RightThigh":
+                case "R_Thigh":
                     rightLegBone = candidate;
                     rightLegRestRotation = candidate.localRotation;
                     break;
                 case "LeftArm":
+                case "LeftShoulder_end":
+                case "L_Arm":
                     leftArmBone = candidate;
                     leftArmRestRotation = candidate.localRotation;
                     break;
                 case "RightArm":
+                case "RightShoulder_end":
+                case "R_Arm":
                     rightArmBone = candidate;
                     rightArmRestRotation = candidate.localRotation;
                     break;

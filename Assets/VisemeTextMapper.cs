@@ -158,47 +158,104 @@ public static class VisemeTextMapper
     // Segmentare text în unități fonetice
     // ────────────────────────────────────────────────────────────────────────
 
+    // Vocale românești (incluzând diacritice)
+    private static readonly System.Collections.Generic.HashSet<char> RomanianVowels =
+        new System.Collections.Generic.HashSet<char>
+        {
+            'a', 'e', 'i', 'o', 'u',
+            '\u0103', // ă
+            '\u00e2', // â
+            '\u00ee'  // î
+        };
+
     /// <summary>
-    /// Parcurge textul caracter cu caracter și grupează digramele fonetice relevante
-    /// pentru română (ch, gh) și engleză (th, diftongii ah/ae/eh/ee/uh/oo).
+    /// Parcurge textul și extrage unități fonetice.
+    /// Română: aplică reguli silabice (V, CV, CCV) conform ortografiei românești —
+    ///         consoanele sunt ataşate vocalei următoare, iar vocala primeşte pondere
+    ///         mai mare pentru a reprezenta silaba.
+    /// Engleză: grupează digrame fonetice (th, sh, wh, diftonguri).
     /// </summary>
     private static List<string> GetUnits(string text, string language)
     {
         List<string> units = new List<string>();
-        // Normalizăm la lowercase dar păstrăm diacriticele (sunt gestionate în MapUnit)
         string normalized = NormalizeText(text);
         bool isRomanian = IsRomanian(language);
 
-        for (int i = 0; i < normalized.Length; i++)
+        if (isRomanian)
         {
-            char c = normalized[i];
+            // ── Română: reguli silabice V, CV, CCV ───────────────────────
+            // Regulă: Parcurgem cuvintele; la fiecare vocală emitem mai întâi
+            // consoanele buferate (ca unități individuale), apoi vocala.
+            // Consoanele finale de cuvânt (coda) sunt emise după vocala precedentă.
+            // Digrame: ch→"ch", gh→"g" (fonetică românească).
+            List<string> consonantBuffer = new List<string>();
 
-            // ── Spații și punctuație → pauze scurte ──
-            if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
+            for (int i = 0; i < normalized.Length; i++)
             {
-                units.Add(c.ToString());
-                continue;
+                char c = normalized[i];
+
+                if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
+                {
+                    // Flushăm consoanele rămase (coda ultimei silabe) înaintea pauzei
+                    foreach (string con in consonantBuffer)
+                        units.Add(con);
+                    consonantBuffer.Clear();
+                    units.Add(c.ToString());
+                    continue;
+                }
+
+                if (!char.IsLetter(c))
+                    continue;
+
+                // Digrame ch și gh
+                if (i + 1 < normalized.Length)
+                {
+                    string pair = normalized.Substring(i, 2);
+                    if (pair == "ch") { consonantBuffer.Add("ch"); i++; continue; }
+                    if (pair == "gh") { consonantBuffer.Add("g");  i++; continue; }
+                }
+
+                if (RomanianVowels.Contains(c))
+                {
+                    // Vocală — emitem consoanele buferate (onset), apoi vocala
+                    foreach (string con in consonantBuffer)
+                        units.Add(con);
+                    consonantBuffer.Clear();
+                    units.Add(c.ToString());
+                }
+                else
+                {
+                    // Consoană — o bufferăm
+                    consonantBuffer.Add(c.ToString());
+                }
             }
 
-            if (!char.IsLetter(c))
-                continue;
-
-            // ── Digrame specifice limbii ──
-            if (i + 1 < normalized.Length)
+            // Consoanele rămase la finalul textului
+            foreach (string con in consonantBuffer)
+                units.Add(con);
+        }
+        else
+        {
+            // ── Engleză: digrame fonetice și diftonguri ───────────────────
+            for (int i = 0; i < normalized.Length; i++)
             {
-                string pair = normalized.Substring(i, 2);
+                char c = normalized[i];
 
-                if (isRomanian)
+                if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
                 {
-                    if (pair == "ch") { units.Add("ch"); i++; continue; }
-                    if (pair == "gh") { units.Add("g");  i++; continue; }
+                    units.Add(c.ToString());
+                    continue;
                 }
-                else // engleză
+
+                if (!char.IsLetter(c))
+                    continue;
+
+                if (i + 1 < normalized.Length)
                 {
+                    string pair = normalized.Substring(i, 2);
                     if (pair == "th") { units.Add("th"); i++; continue; }
-                    if (pair == "sh") { units.Add("ch"); i++; continue; } // SH → același visem cu CH
+                    if (pair == "sh") { units.Add("ch"); i++; continue; }
                     if (pair == "wh") { units.Add("w");  i++; continue; }
-                    // Diftonguri vocale
                     if (pair == "ah" || pair == "ae" || pair == "eh" ||
                         pair == "ee" || pair == "uh" || pair == "oo")
                     {
@@ -207,9 +264,9 @@ public static class VisemeTextMapper
                         continue;
                     }
                 }
-            }
 
-            units.Add(c.ToString());
+                units.Add(c.ToString());
+            }
         }
 
         return units;
@@ -247,7 +304,6 @@ public static class VisemeTextMapper
             // Română: E, I   |   Engleză: E, I, AE, EE, EH
             case "e":
             case "i":
-            case "\u00ee_i": // î atunci când se pronunță ca „i" (rar, tratat separat mai jos)
             case "ae":
             case "ee":
             case "eh":
@@ -352,21 +408,30 @@ public static class VisemeTextMapper
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Ponderea temporală a unei unități: vocalele durează mai mult,
-    /// consoanele mai puțin, iar spațiile/punctuația adaugă pauze naturale.
+    /// Ponderea temporală a unei unități.
+    /// Vocalele primesc mai mult timp (reprezintă nucleul silabei),
+    /// consoanele mai puțin, spațiile/punctuația adaugă pauze naturale.
     /// </summary>
     private static float GetWeight(string unit)
     {
         if (unit.Length == 1 && char.IsWhiteSpace(unit[0]))
-            return 1.8f;
+            return 2.0f;
         if (unit.Length == 1 && char.IsPunctuation(unit[0]))
             return 1.2f;
-        // Vocalele deschise primesc puțin mai mult timp
-        if (unit == "a" || unit == "o" || unit == "u" ||
-            unit == "\u0103" || unit == "\u00e2" || unit == "\u00ee" ||
-            unit == "ah" || unit == "uh")
-            return 1.6f;
-        return unit.Length;
+        // Vocale deschise românești (nucleul silabei) — durată mai mare
+        char ch = unit[0];
+        if (ch == 'a' || ch == 'o' || ch == 'u' ||
+            ch == '\u0103' || ch == '\u00e2' || ch == '\u00ee')
+            return 2.2f;
+        // Vocale medii
+        if (ch == 'e' || ch == 'i')
+            return 1.8f;
+        // Diftonguri englezești
+        if (unit == "ah" || unit == "uh" || unit == "oo" || unit == "ee")
+            return 2.2f;
+        if (unit == "ae" || unit == "eh")
+            return 1.8f;
+        return unit.Length; // consoane și digrame
     }
 
     /// <summary>Converteste textul la lowercase păstrând diacriticele.</summary>

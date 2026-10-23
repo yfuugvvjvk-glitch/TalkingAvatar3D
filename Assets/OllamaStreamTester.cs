@@ -346,9 +346,10 @@ public class OllamaStreamTester : MonoBehaviour
                 }
 
                 audioSource.clip = clip;
+                // PlaySpeech exact înainte de Play() pentru a alinia timeline-ul cu audio
                 if (avatarAnimator != null)
                     avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
-                audioSource.Play();
+                audioSource.Play(); // speechStartedAt și Play() sunt acum consecutive pe același frame
                 while (audioSource.isPlaying)
                     yield return null;
             }
