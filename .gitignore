@@ -1,0 +1,43 @@
+# ── Unity foldere generate (nu se includ în repo) ──────────────────────────
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Bb]uild/
+[Bb]uilds/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+MemoryCaptures/
+
+# ── IDE și fișiere proiect generate ────────────────────────────────────────
+.vs/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+
+# ── Fișiere mari descărcate separat (instalate cu scripturile .bat) ─────────
+# Vocea Piper română (~63 MB) — instalată cu install_romanian_voice.bat
+Tools/TtsService/voices/*.onnx
+Tools/TtsService/voices/*.onnx.json
+
+# Executabilul Rhubarb Lip Sync (~156 MB extras) — instalat cu install_rhubarb.bat
+Tools/Rhubarb/
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Python cache ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+Tools/TtsService/__pycache__/
