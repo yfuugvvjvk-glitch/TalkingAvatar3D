@@ -33,7 +33,6 @@ public class OllamaStreamTester : MonoBehaviour
     private bool   isStreaming;
     private bool   chatInitialized;
 
-    // Corutina TTS — păstrăm referința ca să nu pornim duplicate
     private Coroutine ttsCoroutine;
 
     public string SpeechStatus     { get; private set; } = "TTS: în așteptare";
@@ -60,10 +59,8 @@ public class OllamaStreamTester : MonoBehaviour
     {
         if (isStreaming || string.IsNullOrWhiteSpace(prompt)) return;
 
-        // Detectare comenzi de animație înainte de streaming
         TryStartAvatarAction(prompt);
 
-        // Actualizare UI chat
         lock (streamLock)
         {
             string prev = chatDisplay != null ? chatDisplay.text : currentStreamedText;
@@ -71,7 +68,6 @@ public class OllamaStreamTester : MonoBehaviour
         }
         if (chatDisplay != null) chatDisplay.text = currentStreamedText;
 
-        // Reset buffer
         lock (streamLock)
         {
             speechBuffer.Length = 0;
@@ -80,7 +76,6 @@ public class OllamaStreamTester : MonoBehaviour
 
         isStreaming = true;
 
-        // Pornim corutina TTS — dacă există deja una activă, o oprim și pornim alta nouă
         if (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint))
         {
             if (ttsCoroutine != null)
@@ -122,7 +117,6 @@ public class OllamaStreamTester : MonoBehaviour
         {
             lock (streamLock)
             {
-                // Flushăm orice a mai rămas în buffer la finalul stream-ului
                 string tail = speechBuffer.ToString().Trim();
                 speechBuffer.Length = 0;
                 if (speakResponses && !string.IsNullOrWhiteSpace(tail))
@@ -155,7 +149,6 @@ public class OllamaStreamTester : MonoBehaviour
 
     private void FlushCompletedSentences()
     {
-        // Scoatem propoziții complete la fiecare semn de punctuație final
         int sentenceEnd;
         while ((sentenceEnd = IndexOfSentenceEnd(speechBuffer)) >= 0)
         {
@@ -165,7 +158,6 @@ public class OllamaStreamTester : MonoBehaviour
                 speechQueue.Enqueue(sentence);
         }
 
-        // Dacă bufferul a crescut prea mult fără punct — tăiem la spațiu
         if (speechBuffer.Length >= 100)
         {
             int cut = speechBuffer.ToString().LastIndexOf(' ');
@@ -188,14 +180,13 @@ public class OllamaStreamTester : MonoBehaviour
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Corutina TTS — rulează continuu cât timp există fraze în coadă
+    // Corutina TTS
     // ════════════════════════════════════════════════════════════════════════
 
     private IEnumerator TtsWorker()
     {
         while (true)
         {
-            // Dacă nu mai e nimic de procesat și nu mai streamăm, terminăm
             string phrase = null;
             lock (streamLock)
             {
@@ -207,7 +198,6 @@ public class OllamaStreamTester : MonoBehaviour
             {
                 if (!isStreaming)
                 {
-                    // Stream terminat și coada goală → oprim corutina
                     ttsCoroutine = null;
                     yield break;
                 }
@@ -215,7 +205,6 @@ public class OllamaStreamTester : MonoBehaviour
                 continue;
             }
 
-            // Trimitem fraza la serverul TTS
             yield return SendToTts(phrase);
         }
     }
@@ -243,7 +232,6 @@ public class OllamaStreamTester : MonoBehaviour
 
             if (webReq.result != UnityWebRequest.Result.Success)
             {
-                // TTS a eșuat — logăm și continuăm cu fraza următoare
                 string errBody = webReq.downloadHandler?.data != null
                     ? Encoding.UTF8.GetString(webReq.downloadHandler.data)
                     : "";
@@ -263,13 +251,12 @@ public class OllamaStreamTester : MonoBehaviour
                 yield break;
             }
 
-            // Extragem timeline-ul Rhubarb din header (dacă există)
             string timelineJson  = null;
             string encodedHeader = webReq.GetResponseHeader("X-Viseme-Timeline");
             if (!string.IsNullOrEmpty(encodedHeader))
             {
                 try { timelineJson = Encoding.UTF8.GetString(Convert.FromBase64String(encodedHeader)); }
-                catch { /* header corupt — folosim fallback text */ }
+                catch { /* header corupt — fallback text */ }
             }
 
             string visemeMode = webReq.GetResponseHeader("X-Viseme-Mode") ?? "";
@@ -277,16 +264,14 @@ public class OllamaStreamTester : MonoBehaviour
 
             SpeechStatus = visemeMode.Equals("rhubarb", StringComparison.OrdinalIgnoreCase)
                 ? $"TTS: {ttsEngine} + Rhubarb"
-                : $"TTS: {ttsEngine} + estimare fonematica";
+                : $"TTS: {ttsEngine} + estimare fonematică";
 
-            // Pornim animația și audio exact în același frame
             if (avatarAnimator != null)
                 avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
 
             audioSource.clip = clip;
             audioSource.Play();
 
-            // Așteptăm să termine redarea
             while (audioSource.isPlaying)
                 yield return null;
         }
@@ -302,40 +287,92 @@ public class OllamaStreamTester : MonoBehaviour
             .Replace("ă","a").Replace("â","a").Replace("î","i")
             .Replace("ș","s").Replace("ş","s").Replace("ț","t").Replace("ţ","t");
 
-        // Wave / salut / misca bratele
-        if (Regex.IsMatch(norm, @"\b(salut[a]?|wave|misca\s+brat|ridica\s+brat|agit[a]?\s+brat)\b"))
+        // ── Ridică brațele / mâinile sus (prioritate față de wave simplu) ──
+        if (Regex.IsMatch(norm, @"\b(ridica\s+mainile|ridica\s+mainile\s+sus|ridica\s+bratele|raise\s+(arms?|hands?))\b"))
         {
-            if (avatarAnimator != null) avatarAnimator.StartWaving();
+            avatarAnimator?.StartRaisingArms();
             return;
         }
 
-        Match m = Regex.Match(norm, @"\b(flotari|flotare|push[\s-]?ups?|pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
-        if (!m.Success) return;
+        // ── Wave / salut ───────────────────────────────────────────────────
+        if (Regex.IsMatch(norm, @"\b(salut[a]?|wave|misca\s+brat|ridica\s+brat|agit[a]?\s+brat)\b"))
+        {
+            avatarAnimator?.StartWaving();
+            return;
+        }
 
-        string before = norm.Substring(0, m.Index);
-        if (Regex.IsMatch(before, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return;
+        // ── Înot ───────────────────────────────────────────────────────────
+        if (Regex.IsMatch(norm, @"\b(inoata|inot|swimming|swim)\b"))
+        {
+            int sec = ParseActionCount(norm, norm, 5);
+            avatarAnimator?.StartSwimming(sec);
+            return;
+        }
 
-        int reps = ParseActionCount(before, norm.Substring(m.Index + m.Length));
-        bool isPushUp = m.Value.StartsWith("flotar") || m.Value.StartsWith("push");
+        // ── Săritură ───────────────────────────────────────────────────────
+        if (Regex.IsMatch(norm, @"\b(sari|saritura|jump|sara)\b"))
+        {
+            if (Regex.IsMatch(norm, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
+                return;
+            int reps = ParseActionCount(norm, norm, 3);
+            avatarAnimator?.StartJumping(reps);
+            return;
+        }
 
-        bool ok = avatarAnimator != null &&
-                  (isPushUp ? avatarAnimator.StartPushUps(reps) : avatarAnimator.StartWalking(reps));
-        if (!ok)
-            Debug.LogWarning($"[Avatar] Comanda '{m.Value}' detectată dar animația nu a pornit.");
+        // ── Dans ───────────────────────────────────────────────────────────
+        if (Regex.IsMatch(norm, @"\b(danseaza|dans|dance)\b"))
+        {
+            avatarAnimator?.StartDancing();
+            return;
+        }
+
+        // ── Rotește capul ──────────────────────────────────────────────────
+        if (Regex.IsMatch(norm, @"\b(roteste\s+cap(ul)?|turn\s+head)\b"))
+        {
+            avatarAnimator?.StartHeadRotation(45f, 60f);
+            return;
+        }
+
+        // ── Flotări ────────────────────────────────────────────────────────
+        Match mPush = Regex.Match(norm, @"\b(flotari|flotare|push[\s-]?ups?)\b");
+        if (mPush.Success)
+        {
+            if (Regex.IsMatch(norm.Substring(0, mPush.Index), @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
+                return;
+            string before = norm.Substring(0, mPush.Index);
+            string after  = norm.Substring(mPush.Index + mPush.Length);
+            int reps = ParseActionCount(before, after, 5);
+            avatarAnimator?.StartPushUps(reps);
+            return;
+        }
+
+        // ── Mers ───────────────────────────────────────────────────────────
+        Match mWalk = Regex.Match(norm, @"\b(pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
+        if (!mWalk.Success) return;
+
+        string beforeWalk = norm.Substring(0, mWalk.Index);
+        if (Regex.IsMatch(beforeWalk, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return;
+
+        int steps = ParseActionCount(beforeWalk, norm.Substring(mWalk.Index + mWalk.Length), 5);
+        avatarAnimator?.StartWalking(steps);
     }
 
-    private static int ParseActionCount(string before, string after)
+    private static int ParseActionCount(string before, string after, int defaultVal)
     {
         Match n = Regex.Match(before, @"\b(\d{1,2})\b");
         if (!n.Success) n = Regex.Match(after, @"\b(\d{1,2})\b");
-        if (n.Success && int.TryParse(n.Groups[1].Value, out int c)) return Mathf.Clamp(c, 1, 50);
+        if (n.Success && int.TryParse(n.Groups[1].Value, out int c))
+            return Mathf.Clamp(c, 1, 50);
 
-        string[] words = {"unu|una|one","doi|doua|two","trei|three","patru|four","cinci|five",
-                          "sase|six","sapte|seven","opt|eight","noua|nine","zece|ten"};
+        string[] words = {
+            "unu|una|one","doi|doua|two","trei|three","patru|four","cinci|five",
+            "sase|six","sapte|seven","opt|eight","noua|nine","zece|ten"
+        };
         for (int i = 0; i < words.Length; i++)
-            if (Regex.IsMatch(before, $@"\b({words[i]})\b") || Regex.IsMatch(after, $@"\b({words[i]})\b"))
+            if (Regex.IsMatch(before, $@"\b({words[i]})\b") ||
+                Regex.IsMatch(after,  $@"\b({words[i]})\b"))
                 return i + 1;
-        return 5;
+        return defaultVal;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -347,12 +384,12 @@ public class OllamaStreamTester : MonoBehaviour
         bool ro = speechLanguage.StartsWith("ro", StringComparison.OrdinalIgnoreCase) ||
                   speechLanguage.StartsWith("román", StringComparison.OrdinalIgnoreCase);
         if (ro)
-            return "Ești un asistent conversațional prietenos. Răspunde numai în română, " +
-                   "cu diacritice corecte, în 1-3 propoziții clare și directe. Nu repeta întrebarea. " +
-                   "Aplicația animează mersul și flotările doar la cerere explicită.";
-        return "You are a friendly conversational assistant. Reply in clear, natural English, " +
-               "1-3 sentences. Do not repeat the question. " +
-               "The app animates walking and push-ups only when explicitly requested.";
+            return "Ești un asistent vocal pentru un avatar 3D. Răspunde scurt, 1-2 propoziții, " +
+                   "în română cu diacritice. Nu refuza comenzi de animație — ele sunt gestionate de cod, nu de tine. " +
+                   "Dacă utilizatorul cere o mișcare, confirmă scurt că avatarul o face.";
+        return "You are a voice assistant for a 3D avatar. Reply briefly, 1-2 sentences. " +
+               "Never refuse animation commands — they are handled by code, not you. " +
+               "If the user requests a movement, briefly confirm the avatar is doing it.";
     }
 
     // ════════════════════════════════════════════════════════════════════════
