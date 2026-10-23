@@ -302,6 +302,13 @@ public class OllamaStreamTester : MonoBehaviour
             .Replace("ă","a").Replace("â","a").Replace("î","i")
             .Replace("ș","s").Replace("ş","s").Replace("ț","t").Replace("ţ","t");
 
+        // Wave / salut / misca bratele
+        if (Regex.IsMatch(norm, @"\b(salut[a]?|wave|misca\s+brat|ridica\s+brat|agit[a]?\s+brat)\b"))
+        {
+            if (avatarAnimator != null) avatarAnimator.StartWaving();
+            return;
+        }
+
         Match m = Regex.Match(norm, @"\b(flotari|flotare|push[\s-]?ups?|pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
         if (!m.Success) return;
 
@@ -314,7 +321,7 @@ public class OllamaStreamTester : MonoBehaviour
         bool ok = avatarAnimator != null &&
                   (isPushUp ? avatarAnimator.StartPushUps(reps) : avatarAnimator.StartWalking(reps));
         if (!ok)
-            Debug.LogWarning($"[Avatar] Comanda '{m.Value}' detectată dar animația nu a pornit (avatarRoot sau oase lipsă).");
+            Debug.LogWarning($"[Avatar] Comanda '{m.Value}' detectată dar animația nu a pornit.");
     }
 
     private static int ParseActionCount(string before, string after)
