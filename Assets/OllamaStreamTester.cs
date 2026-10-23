@@ -12,100 +12,84 @@ public class OllamaStreamTester : MonoBehaviour
     [Header("Setări Ollama")]
     public string modelName = "qwen2.5:3b";
 
-    [Header("Setări TTS (API compatibil OpenAI, audio WAV)")]
+    [Header("Setări TTS")]
     public bool speakResponses = true;
     public string ttsEndpoint = "http://127.0.0.1:5000/v1/audio/speech";
-    public string ttsModel = "tts-1";
-    public string ttsVoice = "alloy";
+    public string ttsModel    = "tts-1";
+    public string ttsVoice    = "alloy";
     public string speechLanguage = "English";
 
     [Header("UI References")]
     public TMP_InputField inputField;
-    public TMP_Text chatDisplay;
-    public AudioSource audioSource;
+    public TMP_Text       chatDisplay;
+    public AudioSource    audioSource;
     public AvatarVisemeAnimator avatarAnimator;
 
-    private readonly object streamLock = new object();
-    private readonly Queue<string> speechQueue = new Queue<string>();
+    // ─── Stare internă ───────────────────────────────────────────────────────
+    private readonly object        streamLock   = new object();
+    private readonly Queue<string> speechQueue  = new Queue<string>();
     private readonly StringBuilder speechBuffer = new StringBuilder();
     private string currentStreamedText = "";
-    private bool isStreaming;
-    private bool chatInitialized;
+    private bool   isStreaming;
+    private bool   chatInitialized;
 
-    public string SpeechStatus { get; private set; } = "TTS: în așteptare";
+    // Corutina TTS — păstrăm referința ca să nu pornim duplicate
+    private Coroutine ttsCoroutine;
+
+    public string SpeechStatus     { get; private set; } = "TTS: în așteptare";
     public string AvatarActionStatus => avatarAnimator != null ? avatarAnimator.ActionStatus : string.Empty;
-
+    public bool   IsStreaming        => isStreaming;
     public string CurrentChatText
     {
-        get
-        {
-            lock (streamLock)
-                return currentStreamedText;
-        }
+        get { lock (streamLock) return currentStreamedText; }
     }
 
-    public bool IsStreaming => isStreaming;
+    // ════════════════════════════════════════════════════════════════════════
+    // API public
+    // ════════════════════════════════════════════════════════════════════════
 
     public void SendPrompt()
     {
-        if (inputField == null)
-        {
-            Debug.LogError("Asignează Input Field sau apelează SendPrompt(string).");
-            return;
-        }
-
-        string prompt = inputField.text;
+        if (inputField == null) return;
+        string p = inputField.text.Trim();
         inputField.text = "";
-        SendPrompt(prompt);
+        if (!string.IsNullOrEmpty(p)) SendPrompt(p);
     }
 
     public async void SendPrompt(string prompt)
     {
-        if (isStreaming)
-            return;
+        if (isStreaming || string.IsNullOrWhiteSpace(prompt)) return;
 
-        if (string.IsNullOrWhiteSpace(prompt))
-            return;
-
+        // Detectare comenzi de animație înainte de streaming
         TryStartAvatarAction(prompt);
 
+        // Actualizare UI chat
         lock (streamLock)
         {
-            string existingText = chatDisplay != null ? chatDisplay.text : currentStreamedText;
-            currentStreamedText = existingText + $"\n<b>Tu:</b> {prompt}\n<b>AI:</b> ";
+            string prev = chatDisplay != null ? chatDisplay.text : currentStreamedText;
+            currentStreamedText = prev + $"\nTu: {prompt}\nAI: ";
         }
+        if (chatDisplay != null) chatDisplay.text = currentStreamedText;
 
-        if (chatDisplay != null)
-            chatDisplay.text = currentStreamedText;
-
-        if (inputField != null)
-            inputField.text = "";
-
+        // Reset buffer
         lock (streamLock)
         {
             speechBuffer.Length = 0;
             speechQueue.Clear();
         }
+
         isStreaming = true;
 
-        if (speakResponses)
+        // Pornim corutina TTS o singură dată per sesiune
+        // Dacă e deja activă, nu pornim alta
+        if (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint))
         {
-            if (audioSource == null)
-            {
-                Debug.LogError("Asignează un AudioSource pentru redarea răspunsurilor TTS.");
-                speakResponses = false;
-            }
-            else if (string.IsNullOrWhiteSpace(ttsEndpoint))
-            {
-                Debug.LogError("Configurează endpoint-ul serviciului TTS în Inspector.");
-                speakResponses = false;
-            }
-            else
-            {
-                if (avatarAnimator == null)
-                    Debug.LogError("Asignează AvatarVisemeAnimator pentru animația visemelor.");
-                StartCoroutine(ProcessSpeechQueue());
-            }
+            if (ttsCoroutine == null)
+                ttsCoroutine = StartCoroutine(TtsWorker());
+        }
+        else if (speakResponses && audioSource == null)
+        {
+            Debug.LogWarning("[TTS] AudioSource lipsește — vocea nu va funcționa.");
         }
 
         try
@@ -122,15 +106,20 @@ public class OllamaStreamTester : MonoBehaviour
 
             await ollama.Ollama.ChatStream(OnChunkReceived, modelName, prompt);
         }
-        catch (System.Exception exception)
+        catch (Exception ex)
         {
-            Debug.LogException(exception);
+            Debug.LogException(ex);
         }
         finally
         {
             lock (streamLock)
             {
-                QueueCompletedSpeech();
+                // Flushăm orice a mai rămas în buffer la finalul stream-ului
+                string tail = speechBuffer.ToString().Trim();
+                speechBuffer.Length = 0;
+                if (speakResponses && !string.IsNullOrWhiteSpace(tail))
+                    speechQueue.Enqueue(tail);
+
                 if (chatDisplay != null)
                     chatDisplay.text = currentStreamedText;
             }
@@ -138,69 +127,9 @@ public class OllamaStreamTester : MonoBehaviour
         }
     }
 
-    private string BuildSystemPrompt()
-    {
-        bool romanian = string.Equals(speechLanguage, "Romanian", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(speechLanguage, "Română", StringComparison.OrdinalIgnoreCase);
-        if (romanian)
-        {
-            return "Ești un asistent conversațional prietenos, care vorbește natural. Răspunde numai în limba română, cu diacritice corecte și propoziții clare. Răspunde direct la întrebarea utilizatorului, de regulă în 1-3 propoziții. Nu repeta întrebarea, nu inventa cuvinte, nu produce silabe fără sens și nu continua răspunsul cu text redundant. Dacă nu știi un răspuns, spune sincer acest lucru. Aplicația poate anima mersul pe loc și flotările numai când utilizatorul cere explicit aceste acțiuni; confirmă-le pe scurt și nu pretinde că avatarul execută alte mișcări sau se deplasează prin scenă.";
-        }
-
-        return "You are a friendly conversational assistant. Reply only in fluent, natural English using clear, grammatical sentences. Answer the user's question directly, usually in 1-3 sentences. Do not repeat the question, invent words, produce meaningless syllables, or continue with redundant text. If you do not know an answer, say so honestly. The application can animate walking in place and push-ups only when explicitly requested; briefly confirm these actions and do not claim the avatar performs other movements or travels through the scene.";
-    }
-
-    private void TryStartAvatarAction(string prompt)
-    {
-        string normalized = prompt.ToLowerInvariant()
-            .Replace("ă", "a")
-            .Replace("â", "a")
-            .Replace("î", "i")
-            .Replace("ș", "s")
-            .Replace("ş", "s")
-            .Replace("ț", "t")
-            .Replace("ţ", "t");
-        Match action = Regex.Match(normalized, @"\b(flotari|flotare|push[\s-]?ups?|pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
-        if (!action.Success)
-            return;
-
-        string beforeAction = normalized.Substring(0, action.Index);
-        if (Regex.IsMatch(beforeAction, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
-            return;
-
-        int repetitions = ParseActionCount(beforeAction, normalized.Substring(action.Index + action.Length));
-        bool isPushUp = action.Value.StartsWith("flotar", StringComparison.Ordinal) ||
-                        action.Value.StartsWith("push", StringComparison.Ordinal);
-        bool started = avatarAnimator != null &&
-                       (isPushUp
-                           ? avatarAnimator.StartPushUps(repetitions)
-                           : avatarAnimator.StartWalking(repetitions));
-        if (!started)
-            Debug.LogError($"Comanda de {(isPushUp ? "flotări" : "mers")} a fost detectată, dar animația nu a putut porni.");
-    }
-
-    private static int ParseActionCount(string beforeAction, string afterAction)
-    {
-        Match numericCount = Regex.Match(beforeAction, @"\b(\d{1,2})\b");
-        if (!numericCount.Success)
-            numericCount = Regex.Match(afterAction, @"\b(\d{1,2})\b");
-        if (numericCount.Success && int.TryParse(numericCount.Groups[1].Value, out int count))
-            return Mathf.Clamp(count, 1, 50);
-
-        string[] numberWords =
-        {
-            "unu|una|one", "doi|doua|two", "trei|three", "patru|four", "cinci|five",
-            "sase|six", "sapte|seven", "opt|eight", "noua|nine", "zece|ten"
-        };
-        for (int i = 0; i < numberWords.Length; i++)
-        {
-            if (Regex.IsMatch(beforeAction, $@"\b({numberWords[i]})\b") ||
-                Regex.IsMatch(afterAction, $@"\b({numberWords[i]})\b"))
-                return i + 1;
-        }
-
-        return 5;
-    }
+    // ════════════════════════════════════════════════════════════════════════
+    // Callbacks streaming Ollama
+    // ════════════════════════════════════════════════════════════════════════
 
     private void OnChunkReceived(string chunk)
     {
@@ -211,15 +140,16 @@ public class OllamaStreamTester : MonoBehaviour
             if (speakResponses)
             {
                 speechBuffer.Append(chunk);
-                QueueCompletedSentences();
+                FlushCompletedSentences();
             }
         }
     }
 
-    private void QueueCompletedSentences()
+    private void FlushCompletedSentences()
     {
+        // Scoatem propoziții complete la fiecare semn de punctuație final
         int sentenceEnd;
-        while ((sentenceEnd = FindSentenceEnd(speechBuffer)) >= 0)
+        while ((sentenceEnd = IndexOfSentenceEnd(speechBuffer)) >= 0)
         {
             string sentence = speechBuffer.ToString(0, sentenceEnd + 1).Trim();
             speechBuffer.Remove(0, sentenceEnd + 1);
@@ -227,42 +157,37 @@ public class OllamaStreamTester : MonoBehaviour
                 speechQueue.Enqueue(sentence);
         }
 
-        if (speechBuffer.Length >= 120)
+        // Dacă bufferul a crescut prea mult fără punct — tăiem la spațiu
+        if (speechBuffer.Length >= 100)
         {
-            int breakAt = speechBuffer.ToString().LastIndexOf(' ');
-            if (breakAt > 0)
+            int cut = speechBuffer.ToString().LastIndexOf(' ');
+            if (cut > 0)
             {
-                string phrase = speechBuffer.ToString(0, breakAt).Trim();
-                speechBuffer.Remove(0, breakAt + 1);
-                if (!string.IsNullOrWhiteSpace(phrase))
-                    speechQueue.Enqueue(phrase);
+                string chunk = speechBuffer.ToString(0, cut).Trim();
+                speechBuffer.Remove(0, cut + 1);
+                if (!string.IsNullOrWhiteSpace(chunk))
+                    speechQueue.Enqueue(chunk);
             }
         }
     }
 
-    private static int FindSentenceEnd(StringBuilder text)
+    private static int IndexOfSentenceEnd(StringBuilder sb)
     {
-        for (int i = 0; i < text.Length; i++)
-        {
-            if (text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == '\n')
+        for (int i = 0; i < sb.Length; i++)
+            if (sb[i] == '.' || sb[i] == '!' || sb[i] == '?' || sb[i] == '\n')
                 return i;
-        }
-
         return -1;
     }
 
-    private void QueueCompletedSpeech()
-    {
-        string finalPhrase = speechBuffer.ToString().Trim();
-        speechBuffer.Length = 0;
-        if (speakResponses && !string.IsNullOrWhiteSpace(finalPhrase))
-            speechQueue.Enqueue(finalPhrase);
-    }
+    // ════════════════════════════════════════════════════════════════════════
+    // Corutina TTS — rulează continuu cât timp există fraze în coadă
+    // ════════════════════════════════════════════════════════════════════════
 
-    private IEnumerator ProcessSpeechQueue()
+    private IEnumerator TtsWorker()
     {
         while (true)
         {
+            // Dacă nu mai e nimic de procesat și nu mai streamăm, terminăm
             string phrase = null;
             lock (streamLock)
             {
@@ -273,92 +198,165 @@ public class OllamaStreamTester : MonoBehaviour
             if (phrase == null)
             {
                 if (!isStreaming)
+                {
+                    // Stream terminat și coada goală → oprim corutina
+                    ttsCoroutine = null;
                     yield break;
-
+                }
                 yield return null;
                 continue;
             }
 
-            SpeechRequest request = new SpeechRequest
-            {
-                model = ttsModel,
-                input = phrase,
-                voice = ttsVoice,
-                language = speechLanguage,
-                response_format = "wav"
-            };
-            byte[] body = Encoding.UTF8.GetBytes(JsonUtility.ToJson(request));
-            using (UnityWebRequest webRequest = new UnityWebRequest(ttsEndpoint, UnityWebRequest.kHttpVerbPOST))
-            {
-                webRequest.uploadHandler = new UploadHandlerRaw(body);
-                webRequest.downloadHandler = new DownloadHandlerAudioClip(ttsEndpoint, AudioType.WAV);
-                webRequest.SetRequestHeader("Content-Type", "application/json");
-                yield return webRequest.SendWebRequest();
-
-                if (webRequest.result != UnityWebRequest.Result.Success)
-                {
-                    string responseBody = webRequest.downloadHandler != null
-                        ? Encoding.UTF8.GetString(webRequest.downloadHandler.data ?? Array.Empty<byte>())
-                        : string.Empty;
-                    SpeechError speechError = string.IsNullOrEmpty(responseBody)
-                        ? null
-                        : JsonUtility.FromJson<SpeechError>(responseBody);
-                    string errorMessage = speechError != null && !string.IsNullOrEmpty(speechError.error)
-                        ? speechError.error
-                        : webRequest.error;
-                    SpeechStatus = $"TTS indisponibil ({webRequest.responseCode}): {errorMessage}";
-                    Debug.LogError(SpeechStatus);
-                    continue;
-                }
-
-                AudioClip clip = DownloadHandlerAudioClip.GetContent(webRequest);
-                if (clip == null)
-                {
-                    SpeechStatus = "TTS nu a returnat un WAV valid.";
-                    Debug.LogError(SpeechStatus);
-                    continue;
-                }
-
-                string timelineJson = null;
-                string encodedTimeline = webRequest.GetResponseHeader("X-Viseme-Timeline");
-                if (!string.IsNullOrEmpty(encodedTimeline))
-                {
-                    try
-                    {
-                        timelineJson = Encoding.UTF8.GetString(Convert.FromBase64String(encodedTimeline));
-                    }
-                    catch (FormatException exception)
-                    {
-                        Debug.LogWarning($"Cronologia visemelor Rhubarb nu este validă: {exception.Message}");
-                    }
-                }
-
-                string visemeMode = webRequest.GetResponseHeader("X-Viseme-Mode");
-                string ttsEngine = webRequest.GetResponseHeader("X-TTS-Engine");
-                if (string.Equals(visemeMode, "rhubarb", StringComparison.OrdinalIgnoreCase) &&
-                    !string.IsNullOrEmpty(timelineJson))
-                {
-                    SpeechStatus = $"TTS: {ttsEngine ?? "audio"} + sincronizare Rhubarb";
-                }
-                else
-                {
-                    SpeechStatus = $"TTS: {ttsEngine ?? "audio"} + estimare viseme din text (Rhubarb lipsește sau a eșuat)";
-                    Debug.LogWarning(SpeechStatus);
-                }
-
-                audioSource.clip = clip;
-                // PlaySpeech exact înainte de Play() pentru a alinia timeline-ul cu audio
-                if (avatarAnimator != null)
-                    avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
-                audioSource.Play(); // speechStartedAt și Play() sunt acum consecutive pe același frame
-                while (audioSource.isPlaying)
-                    yield return null;
-            }
+            // Trimitem fraza la serverul TTS
+            yield return SendToTts(phrase);
         }
     }
 
-    [Serializable]
-    private class SpeechRequest
+    private IEnumerator SendToTts(string phrase)
+    {
+        var request = new SpeechRequest
+        {
+            model           = ttsModel,
+            input           = phrase,
+            voice           = ttsVoice,
+            language        = speechLanguage,
+            response_format = "wav"
+        };
+
+        byte[] body = Encoding.UTF8.GetBytes(JsonUtility.ToJson(request));
+
+        using (var webReq = new UnityWebRequest(ttsEndpoint, UnityWebRequest.kHttpVerbPOST))
+        {
+            webReq.uploadHandler   = new UploadHandlerRaw(body);
+            webReq.downloadHandler = new DownloadHandlerAudioClip(ttsEndpoint, AudioType.WAV);
+            webReq.SetRequestHeader("Content-Type", "application/json");
+
+            yield return webReq.SendWebRequest();
+
+            if (webReq.result != UnityWebRequest.Result.Success)
+            {
+                // TTS a eșuat — logăm și continuăm cu fraza următoare
+                string errBody = webReq.downloadHandler?.data != null
+                    ? Encoding.UTF8.GetString(webReq.downloadHandler.data)
+                    : "";
+                var errObj = string.IsNullOrEmpty(errBody)
+                    ? null : JsonUtility.FromJson<SpeechError>(errBody);
+                string msg = errObj?.error ?? webReq.error;
+                SpeechStatus = $"TTS eroare ({webReq.responseCode}): {msg}";
+                Debug.LogError(SpeechStatus);
+                yield break;
+            }
+
+            AudioClip clip = DownloadHandlerAudioClip.GetContent(webReq);
+            if (clip == null)
+            {
+                SpeechStatus = "TTS: WAV invalid.";
+                Debug.LogError(SpeechStatus);
+                yield break;
+            }
+
+            // Extragem timeline-ul Rhubarb din header (dacă există)
+            string timelineJson  = null;
+            string encodedHeader = webReq.GetResponseHeader("X-Viseme-Timeline");
+            if (!string.IsNullOrEmpty(encodedHeader))
+            {
+                try { timelineJson = Encoding.UTF8.GetString(Convert.FromBase64String(encodedHeader)); }
+                catch { /* header corupt — folosim fallback text */ }
+            }
+
+            string visemeMode = webReq.GetResponseHeader("X-Viseme-Mode") ?? "";
+            string ttsEngine  = webReq.GetResponseHeader("X-TTS-Engine")  ?? "audio";
+
+            SpeechStatus = visemeMode.Equals("rhubarb", StringComparison.OrdinalIgnoreCase)
+                ? $"TTS: {ttsEngine} + Rhubarb"
+                : $"TTS: {ttsEngine} + estimare fonematica";
+
+            // Pornim animația și audio exact în același frame
+            if (avatarAnimator != null)
+                avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
+
+            audioSource.clip = clip;
+            audioSource.Play();
+
+            // Așteptăm să termine redarea
+            while (audioSource.isPlaying)
+                yield return null;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Detecție comenzi de animație
+    // ════════════════════════════════════════════════════════════════════════
+
+    private void TryStartAvatarAction(string prompt)
+    {
+        string norm = prompt.ToLowerInvariant()
+            .Replace("ă","a").Replace("â","a").Replace("î","i")
+            .Replace("ș","s").Replace("ş","s").Replace("ț","t").Replace("ţ","t");
+
+        Match m = Regex.Match(norm, @"\b(flotari|flotare|push[\s-]?ups?|pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
+        if (!m.Success) return;
+
+        string before = norm.Substring(0, m.Index);
+        if (Regex.IsMatch(before, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return;
+
+        int reps = ParseActionCount(before, norm.Substring(m.Index + m.Length));
+        bool isPushUp = m.Value.StartsWith("flotar") || m.Value.StartsWith("push");
+
+        bool ok = avatarAnimator != null &&
+                  (isPushUp ? avatarAnimator.StartPushUps(reps) : avatarAnimator.StartWalking(reps));
+        if (!ok)
+            Debug.LogWarning($"[Avatar] Comanda '{m.Value}' detectată dar animația nu a pornit (avatarRoot sau oase lipsă).");
+    }
+
+    private static int ParseActionCount(string before, string after)
+    {
+        Match n = Regex.Match(before, @"\b(\d{1,2})\b");
+        if (!n.Success) n = Regex.Match(after, @"\b(\d{1,2})\b");
+        if (n.Success && int.TryParse(n.Groups[1].Value, out int c)) return Mathf.Clamp(c, 1, 50);
+
+        string[] words = {"unu|una|one","doi|doua|two","trei|three","patru|four","cinci|five",
+                          "sase|six","sapte|seven","opt|eight","noua|nine","zece|ten"};
+        for (int i = 0; i < words.Length; i++)
+            if (Regex.IsMatch(before, $@"\b({words[i]})\b") || Regex.IsMatch(after, $@"\b({words[i]})\b"))
+                return i + 1;
+        return 5;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Prompt sistem
+    // ════════════════════════════════════════════════════════════════════════
+
+    private string BuildSystemPrompt()
+    {
+        bool ro = speechLanguage.StartsWith("ro", StringComparison.OrdinalIgnoreCase) ||
+                  speechLanguage.StartsWith("román", StringComparison.OrdinalIgnoreCase);
+        if (ro)
+            return "Ești un asistent conversațional prietenos. Răspunde numai în română, " +
+                   "cu diacritice corecte, în 1-3 propoziții clare și directe. Nu repeta întrebarea. " +
+                   "Aplicația animează mersul și flotările doar la cerere explicită.";
+        return "You are a friendly conversational assistant. Reply in clear, natural English, " +
+               "1-3 sentences. Do not repeat the question. " +
+               "The app animates walking and push-ups only when explicitly requested.";
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Update — sincronizare UI
+    // ════════════════════════════════════════════════════════════════════════
+
+    private void Update()
+    {
+        if (chatDisplay == null) return;
+        string text;
+        lock (streamLock) text = currentStreamedText;
+        if (chatDisplay.text != text) chatDisplay.text = text;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Clase serializabile pentru JSON
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Serializable] private class SpeechRequest
     {
         public string model;
         public string input;
@@ -367,22 +365,8 @@ public class OllamaStreamTester : MonoBehaviour
         public string response_format;
     }
 
-    [Serializable]
-    private class SpeechError
+    [Serializable] private class SpeechError
     {
         public string error = string.Empty;
-    }
-
-    private void Update()
-    {
-        if (!isStreaming || chatDisplay == null)
-            return;
-
-        string streamedText;
-        lock (streamLock)
-            streamedText = currentStreamedText;
-
-        if (chatDisplay.text != streamedText)
-            chatDisplay.text = streamedText;
     }
 }
