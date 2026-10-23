@@ -314,7 +314,6 @@ public static class VisemeTextMapper
         { "program",  new[]{"p","r","oh","g","r","ae","m"}},
         { "algorithm",new[]{"ae","l","g","uh","r","ih","th","uh","m"}},
         { "beautiful",new[]{"b","y","oo","t","ih","f","uh","l"}},
-        { "people",   new[]{"p","ee","p","uh","l"}},
         { "really",   new[]{"r","ee","uh","l","ee"}},
         { "actually", new[]{"ae","k","ch","oo","uh","l","ee"}},
         { "probably", new[]{"p","r","ah","b","uh","b","l","ee"}},
