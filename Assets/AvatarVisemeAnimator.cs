@@ -383,31 +383,41 @@ public class AvatarVisemeAnimator : MonoBehaviour
         var all = GetComponentsInChildren<SkinnedMeshRenderer>(true);
         if (all.Length == 0) { Debug.LogWarning("[Avatar] Niciun SkinnedMeshRenderer găsit.", this); return; }
 
-        // Detecție mesh față
+        // ── Detectie mesh față ────────────────────────────────────────────
+        // Folosim DOAR AvatarHead — celelalte mesh-uri (AvatarEyelashes,
+        // AvatarTeethLower, AvatarTeethUpper, AvatarLeftEyeball, AvatarRightEyeball,
+        // AvatarBody, outfit_*) NU primesc blendshapes faciale.
         if (faceRenderer == null)
         {
-            // 1. Exact "AvatarHead"
+            // Prioritate 1: exact "AvatarHead"
             foreach (var r in all)
                 if (r.gameObject.name.Equals("AvatarHead", StringComparison.OrdinalIgnoreCase))
                 { faceRenderer = r; break; }
 
-            // 2. Conține "head" sau "face"
+            // Prioritate 2: conține "head" DAR nu e eyelashes/teeth/eyeball/body/outfit
             if (faceRenderer == null)
                 foreach (var r in all)
                 {
-                    string n = r.gameObject.name;
-                    if (n.IndexOf("head", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        n.IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0)
+                    string n = r.gameObject.name.ToLowerInvariant();
+                    if (n.Contains("head") &&
+                        !n.Contains("eyelash") && !n.Contains("teeth") &&
+                        !n.Contains("eyeball") && !n.Contains("eye") &&
+                        !n.Contains("body") && !n.Contains("outfit"))
                     { faceRenderer = r; break; }
                 }
 
-            // 3. Mesh cu cei mai mulți blendshapes
+            // Prioritate 3: mesh cu cei mai mulți blendshapes — tot cu excluderi
             if (faceRenderer == null)
             {
                 int max = -1;
                 foreach (var r in all)
                 {
                     if (r.sharedMesh == null) continue;
+                    string n = r.gameObject.name.ToLowerInvariant();
+                    // Excludem explicit mesh-urile non-faciale
+                    if (n.Contains("eyelash") || n.Contains("teeth") || n.Contains("eyeball") ||
+                        n.Contains("body") || n.Contains("outfit") || n.Contains("shoe") ||
+                        n.Contains("hair") || n.Contains("cloth")) continue;
                     int c = r.sharedMesh.blendShapeCount;
                     if (c > max) { max = c; faceRenderer = r; }
                 }
@@ -421,7 +431,8 @@ public class AvatarVisemeAnimator : MonoBehaviour
         }
 
         Debug.Log($"[Avatar] Mesh față: '{faceRenderer.gameObject.name}' " +
-                  $"({faceRenderer.sharedMesh?.blendShapeCount ?? 0} blendshapes).", this);
+                  $"({faceRenderer.sharedMesh?.blendShapeCount ?? 0} blendshapes). " +
+                  $"Mesh-uri excluse: eyelashes/teeth/eyeball/body/outfit.", this);
 
         IndexRenderer(faceRenderer);
 
@@ -502,13 +513,19 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private void CacheUpperBodyBone()
     {
+        // Modelul are: Spine → Spine1 → Spine2
+        // Spine2 = vertebra toracică superioară — mișcare subtilă de respirație
         foreach (var t in GetComponentsInChildren<Transform>(true))
         {
             string n = t.name;
-            if (n.Equals("Spine2",      StringComparison.OrdinalIgnoreCase) ||
-                n.Equals("Spine1",      StringComparison.OrdinalIgnoreCase) ||
-                n.Equals("Chest",       StringComparison.OrdinalIgnoreCase) ||
-                n.Equals("UpperChest",  StringComparison.OrdinalIgnoreCase))
+            if (n.Equals("Spine2", StringComparison.OrdinalIgnoreCase) ||
+                n.Equals("Spine1", StringComparison.OrdinalIgnoreCase))
+            { upperBodyBone = t; upperBodyRestRot = t.localRotation; return; }
+        }
+        // Fallback la Spine dacă nu există Spine1/Spine2
+        foreach (var t in GetComponentsInChildren<Transform>(true))
+        {
+            if (t.name.Equals("Spine", StringComparison.OrdinalIgnoreCase))
             { upperBodyBone = t; upperBodyRestRot = t.localRotation; return; }
         }
     }
@@ -521,24 +538,31 @@ public class AvatarVisemeAnimator : MonoBehaviour
         {
             string n = t.name;
             int sep = n.LastIndexOf(':'); if (sep >= 0) n = n.Substring(sep + 1);
+
+            // ── Structura exactă a modelului (din GLB): ──────────────────
+            // Picioare: LeftUpLeg, LeftLeg (tibia), LeftFoot
+            // Brațe:    LeftShoulder (claviculă) → LeftArm (humerus) → LeftForeArm
+            // Vrem LeftArm pentru swing natural, nu LeftShoulder
+
             switch (n)
             {
-                case "LeftUpLeg":  case "LeftThigh":  case "L_Thigh":
-                case "LeftLeg":    case "Left_Thigh":
+                case "LeftUpLeg":
                     leftLegBone = t; leftLegRestRot = t.localRotation; break;
-                case "RightUpLeg": case "RightThigh": case "R_Thigh":
-                case "RightLeg":   case "Right_Thigh":
+                case "RightUpLeg":
                     rightLegBone = t; rightLegRestRot = t.localRotation; break;
-                case "LeftArm":    case "LeftShoulder": case "L_Arm":
-                case "Left_Arm":   case "LeftForeArm":
-                    if (leftArmBone == null) { leftArmBone = t; leftArmRestRot = t.localRotation; }
-                    break;
-                case "RightArm":   case "RightShoulder": case "R_Arm":
-                case "Right_Arm":  case "RightForeArm":
-                    if (rightArmBone == null) { rightArmBone = t; rightArmRestRot = t.localRotation; }
-                    break;
+                // LeftArm = humerus (os superior brat) — swing frumos
+                case "LeftArm":
+                    leftArmBone = t; leftArmRestRot = t.localRotation; break;
+                case "RightArm":
+                    rightArmBone = t; rightArmRestRot = t.localRotation; break;
             }
         }
+
+        Debug.Log($"[Avatar] Walk bones: " +
+                  $"leftLeg={leftLegBone?.name ?? "null"} | " +
+                  $"rightLeg={rightLegBone?.name ?? "null"} | " +
+                  $"leftArm={leftArmBone?.name ?? "null"} | " +
+                  $"rightArm={rightArmBone?.name ?? "null"}");
     }
 
     private void RestoreMovementPose()
