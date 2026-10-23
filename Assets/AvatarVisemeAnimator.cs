@@ -86,11 +86,19 @@ public class AvatarVisemeAnimator : MonoBehaviour
         rootRestPos = avatarRoot.localPosition;
         rootRestRot = avatarRoot.localRotation;
 
-        // Re-cache oase din sub-arborele avatarului (poate diferi de ierarhia
-        // componentei dacă avatarul e un copil adăugat dinamic)
+        // Re-cache oase din sub-arborele avatarului
         CacheHeadBone();
         CacheUpperBodyBone();
         CacheWalkBones();
+
+        // Log ce oase s-au găsit
+        Debug.Log($"[Avatar] SetAvatarRoot: {root.name} | " +
+                  $"head={headBone?.name ?? "null"} | " +
+                  $"spine={upperBodyBone?.name ?? "null"} | " +
+                  $"leftLeg={leftLegBone?.name ?? "null"} | " +
+                  $"rightLeg={rightLegBone?.name ?? "null"} | " +
+                  $"leftArm={leftArmBone?.name ?? "null"} | " +
+                  $"rightArm={rightArmBone?.name ?? "null"}");
     }
 
     public void PlaySpeech(string text, float duration, string language)

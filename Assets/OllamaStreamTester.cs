@@ -80,16 +80,24 @@ public class OllamaStreamTester : MonoBehaviour
 
         isStreaming = true;
 
-        // Pornim corutina TTS o singură dată per sesiune
-        // Dacă e deja activă, nu pornim alta
+        // Pornim corutina TTS — dacă există deja una activă, o oprim și pornim alta nouă
         if (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint))
         {
-            if (ttsCoroutine == null)
-                ttsCoroutine = StartCoroutine(TtsWorker());
+            if (ttsCoroutine != null)
+            {
+                StopCoroutine(ttsCoroutine);
+                ttsCoroutine = null;
+            }
+            ttsCoroutine = StartCoroutine(TtsWorker());
+            Debug.Log("[TTS] Coroutine pornita pentru: " + prompt.Substring(0, Mathf.Min(30, prompt.Length)));
         }
         else if (speakResponses && audioSource == null)
         {
             Debug.LogWarning("[TTS] AudioSource lipsește — vocea nu va funcționa.");
+        }
+        else if (!speakResponses)
+        {
+            Debug.LogWarning("[TTS] speakResponses = false — vocea dezactivata.");
         }
 
         try
