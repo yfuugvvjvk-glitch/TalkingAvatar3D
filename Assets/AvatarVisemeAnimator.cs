@@ -3,731 +3,531 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Controlează animația facială (blendshapes) și mișcările corpului avatarului 3D.
-/// Aplică viseme interpolate (Lerp) sincronizate cu vorbirea, plus animații procedurale
-/// pentru mers pe loc și flotări.
+/// Animație facială (blendshapes + Lerp) și animații procedurale (mers, flotări).
 /// </summary>
 public class AvatarVisemeAnimator : MonoBehaviour
 {
-    [Header("Configurare mesh")]
-    [Tooltip("Renderer-ul mesh-ului feței. Dacă e gol, scriptul îl detectează automat.")]
+    [Header("Mesh față")]
+    [Tooltip("Setează manual dacă detecția automată nu găsește mesh-ul corect.")]
     [SerializeField] private SkinnedMeshRenderer faceRenderer;
 
-    [Header("Parametri animație")]
-    [Tooltip("Viteza de tranziție Lerp între stări faciale (mai mare = mai rapid).")]
+    [Header("Animație")]
     [SerializeField, Min(0.01f)] private float blendSpeed = 12f;
 
-    // ─── Date interne pentru blendshapes ────────────────────────────────────
-    private struct ShapeBinding
-    {
-        public SkinnedMeshRenderer renderer;
-        public int index;
-    }
+#if UNITY_EDITOR
+    [Header("Debug")]
+    [SerializeField] private bool logBlendShapeNames;
+#endif
 
-    // Mapare: nume normalizat -> lista de binding-uri (renderer + index blendshape)
-    private readonly Dictionary<string, List<ShapeBinding>> shapeBindings =
-        new Dictionary<string, List<ShapeBinding>>();
-
-    // Valorile curente interpolate pentru fiecare shape activ
-    private readonly Dictionary<string, float> currentShapeValues =
-        new Dictionary<string, float>();
-
-    // Timeline-ul visemelor pentru fraza curentă
+    // ─── Blendshapes ────────────────────────────────────────────────────────
+    private struct ShapeBinding { public SkinnedMeshRenderer renderer; public int index; }
+    private readonly Dictionary<string, List<ShapeBinding>> shapeBindings = new Dictionary<string, List<ShapeBinding>>();
+    private readonly Dictionary<string, float> currentShapeValues = new Dictionary<string, float>();
+    // Set cu numele shape-urilor "reale" (nu alias) — pentru a evita aliasuri duplicate
+    private readonly HashSet<string> realShapeNames = new HashSet<string>();
     private readonly List<VisemeFrame> timeline = new List<VisemeFrame>();
-
     private bool warnedAboutInvalidRenderer;
     private float speechDuration;
     private float speechStartedAt;
 
-    // ─── Oase cap și corp superior ──────────────────────────────────────────
-    private Transform headBone;
-    private Quaternion headRestRotation;
-    private Transform upperBodyBone;
-    private Quaternion upperBodyRestRotation;
+    // ─── Oase ───────────────────────────────────────────────────────────────
+    private Transform headBone;        private Quaternion headRestRot;
+    private Transform upperBodyBone;   private Quaternion upperBodyRestRot;
+    private Transform avatarRoot;      private Vector3 rootRestPos; private Quaternion rootRestRot;
+    private Transform leftLegBone;     private Quaternion leftLegRestRot;
+    private Transform rightLegBone;    private Quaternion rightLegRestRot;
+    private Transform leftArmBone;     private Quaternion leftArmRestRot;
+    private Transform rightArmBone;    private Quaternion rightArmRestRot;
 
-    // ─── Rădăcina avatarului ─────────────────────────────────────────────────
-    private Transform avatarRoot;
-    private Vector3 avatarRootRestPosition;
-    private Quaternion avatarRootRestRotation;
-
-    // ─── Animație flotări ────────────────────────────────────────────────────
-    private int pushUpRepetitions;
-    private float pushUpStartedAt;
-    private bool pushUpActive;
-
-    // ─── Animație mers ──────────────────────────────────────────────────────
-    private int walkSteps;
-    private float walkStartedAt;
-    private bool walkActive;
-    private Transform leftLegBone;
-    private Transform rightLegBone;
-    private Transform leftArmBone;
-    private Transform rightArmBone;
-    private Quaternion leftLegRestRotation;
-    private Quaternion rightLegRestRotation;
-    private Quaternion leftArmRestRotation;
-    private Quaternion rightArmRestRotation;
-
+    // ─── Animații corp ───────────────────────────────────────────────────────
+    private int   pushUpReps;    private float pushUpStart;  private bool pushUpActive;
+    private int   walkSteps;     private float walkStart;    private bool walkActive;
     private string actionStatus = string.Empty;
-    public string ActionStatus => actionStatus;
+    public  string ActionStatus => actionStatus;
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Vizualizare shapes active (pentru debug în Editor)
-    // ────────────────────────────────────────────────────────────────────────
-#if UNITY_EDITOR
-    [Header("Debug (Editor only)")]
-    [SerializeField] private bool logBlendShapeNames;
-#endif
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Lifecycle Unity
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // Lifecycle
+    // ════════════════════════════════════════════════════════════════════════
 
     private void Awake()
     {
         CacheHeadBone();
         CacheUpperBodyBone();
-        CacheWalkBones();
+        // Oasele de mers sunt cache-uite din ierarhie; vor fi re-cache-uite și
+        // din sub-arborele avatarului după SetAvatarRoot().
         RefreshBlendShapes();
     }
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
     // API public
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Rescane toate blendshape-urile din ierarhie și le reindexează.</summary>
     public void RefreshBlendShapes()
     {
         shapeBindings.Clear();
         currentShapeValues.Clear();
+        realShapeNames.Clear();
         CacheBlendShapes();
-        if (headBone == null)
-            CacheHeadBone();
-        if (upperBodyBone == null)
-            CacheUpperBodyBone();
+        if (headBone == null)      CacheHeadBone();
+        if (upperBodyBone == null) CacheUpperBodyBone();
         CacheWalkBones();
         ResetFaceBlendShapes();
     }
 
-    /// <summary>Pornește animația buzelor folosind estimarea fonematică din text.</summary>
+    /// <summary>
+    /// Setează rădăcina avatarului GLB după instanțiere și
+    /// re-cachez oasele din noul sub-arbore.
+    /// </summary>
+    public void SetAvatarRoot(Transform root)
+    {
+        avatarRoot = root;
+        if (avatarRoot == null) return;
+
+        rootRestPos = avatarRoot.localPosition;
+        rootRestRot = avatarRoot.localRotation;
+
+        // Re-cache oase din sub-arborele avatarului (poate diferi de ierarhia
+        // componentei dacă avatarul e un copil adăugat dinamic)
+        CacheHeadBone();
+        CacheUpperBodyBone();
+        CacheWalkBones();
+    }
+
     public void PlaySpeech(string text, float duration, string language)
     {
         timeline.Clear();
         timeline.AddRange(VisemeTextMapper.CreateTimeline(text, duration, language));
-        speechDuration = duration;
+        speechDuration  = duration;
         speechStartedAt = Time.time;
     }
 
-    /// <summary>Pornește animația buzelor cu date Rhubarb, sau fallback la text dacă datele lipsesc.</summary>
     public void PlaySpeech(string text, float duration, string language, string rhubarbJson)
     {
         timeline.Clear();
-        List<VisemeFrame> rhubarb = VisemeTextMapper.CreateRhubarbTimeline(rhubarbJson, duration);
-        if (rhubarb.Count > 0)
-            timeline.AddRange(rhubarb);
-        else
-            timeline.AddRange(VisemeTextMapper.CreateTimeline(text, duration, language));
-
-        speechDuration = duration;
+        var rhubarb = VisemeTextMapper.CreateRhubarbTimeline(rhubarbJson, duration);
+        timeline.AddRange(rhubarb.Count > 0
+            ? rhubarb
+            : VisemeTextMapper.CreateTimeline(text, duration, language));
+        speechDuration  = duration;
         speechStartedAt = Time.time;
     }
 
-    /// <summary>Setează rădăcina avatarului după ce modelul GLB a fost instanțiat.</summary>
-    public void SetAvatarRoot(Transform root)
-    {
-        avatarRoot = root;
-        if (avatarRoot == null)
-            return;
-
-        avatarRootRestPosition = avatarRoot.localPosition;
-        avatarRootRestRotation = avatarRoot.localRotation;
-    }
-
-    /// <summary>Pornește animația procedurală de flotări.</summary>
     public bool StartPushUps(int repetitions)
     {
         if (avatarRoot == null)
         {
-            Debug.LogError("Nu pot porni animația de flotări: avatarul nu este încărcat.", this);
+            Debug.LogError("[Avatar] avatarRoot este null — avatarul nu e încă încărcat.", this);
             return false;
         }
-
         RestoreMovementPose();
-        pushUpRepetitions = Mathf.Clamp(repetitions, 1, 20);
-        walkActive = false;
-        pushUpStartedAt = Time.time;
-        pushUpActive = true;
-        actionStatus = $"Avatar: execută {pushUpRepetitions} flotări...";
+        pushUpReps    = Mathf.Clamp(repetitions, 1, 20);
+        walkActive    = false;
+        pushUpStart   = Time.time;
+        pushUpActive  = true;
+        actionStatus  = $"Avatar: executa {pushUpReps} flotari...";
         return true;
     }
 
-    /// <summary>Pornește animația procedurală de mers pe loc.</summary>
     public bool StartWalking(int steps)
     {
-        if (avatarRoot == null || leftLegBone == null || rightLegBone == null)
+        if (avatarRoot == null)
         {
-            Debug.LogError("Nu pot porni mersul: avatarul sau oasele picioarelor nu sunt disponibile.", this);
+            Debug.LogError("[Avatar] avatarRoot este null — avatarul nu e încă încărcat.", this);
             return false;
         }
+        // Dacă oasele nu s-au găsit, log warning dar permite mersul (va fi
+        // animat doar root-ul, fără swing de picioare)
+        if (leftLegBone == null || rightLegBone == null)
+            Debug.LogWarning("[Avatar] Oasele picioarelor nu au fost găsite. Mersu funcțional fără swing.", this);
 
         RestoreMovementPose();
-        walkSteps = Mathf.Clamp(steps, 1, 50);
+        walkSteps   = Mathf.Clamp(steps, 1, 50);
         pushUpActive = false;
-        walkStartedAt = Time.time;
-        walkActive = true;
-        actionStatus = $"Avatar: începe mersul ({walkSteps} pași)...";
+        walkStart   = Time.time;
+        walkActive  = true;
+        actionStatus = $"Avatar: incepe mersul ({walkSteps} pasi)...";
         return true;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Update principal
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // Update
+    // ════════════════════════════════════════════════════════════════════════
 
     private void Update()
     {
         float elapsed = Time.time - speechStartedAt;
-        bool speaking = elapsed < speechDuration && timeline.Count > 0;
+        bool  speaking = elapsed < speechDuration && timeline.Count > 0;
 
-        // ── Animație facială ──
+        // Animație facială
         if (shapeBindings.Count > 0)
-        {
-            AvatarViseme current = speaking ? GetVisemeAt(elapsed) : AvatarViseme.Rest;
-            ApplyViseme(current);
-        }
+            ApplyViseme(speaking ? GetVisemeAt(elapsed) : AvatarViseme.Rest);
 
-        // ── Animații corp ──
-        if (pushUpActive)
-        {
-            UpdatePushUps();
-            return; // nu mai aplica cap/corp în flotări
-        }
+        if (pushUpActive) { UpdatePushUps(); return; }
+        if (walkActive)     UpdateWalk();
 
-        if (walkActive)
-            UpdateWalk();
-
-        // ── Mișcare cap subtilă (respirație + vorbire) ──
+        // Cap
         if (headBone != null)
         {
-            float motion = speaking ? Mathf.Sin(elapsed * 4.2f) : 0f;
-            Quaternion targetRotation = headRestRotation *
-                Quaternion.Euler(motion * 2.5f,
-                                 Mathf.Sin(elapsed * 2.1f) * (speaking ? 1.5f : 0f),
-                                 motion * 1.5f);
-            headBone.localRotation = Quaternion.Slerp(
-                headBone.localRotation, targetRotation, Time.deltaTime * blendSpeed);
+            float m = speaking ? Mathf.Sin(elapsed * 4.2f) : 0f;
+            headBone.localRotation = Quaternion.Slerp(headBone.localRotation,
+                headRestRot * Quaternion.Euler(m * 2.5f, Mathf.Sin(elapsed * 2.1f) * (speaking ? 1.5f : 0f), m * 1.5f),
+                Time.deltaTime * blendSpeed);
         }
 
-        // ── Mișcare corp superior subtilă (respirație) ──
+        // Corp superior (respirație)
         if (upperBodyBone != null)
         {
-            float breath = speaking ? Mathf.Sin(elapsed * 2.4f) : 0f;
-            Quaternion targetRotation = upperBodyRestRotation *
-                Quaternion.Euler(breath * 1.5f, 0f, breath * 1.0f);
-            upperBodyBone.localRotation = Quaternion.Slerp(
-                upperBodyBone.localRotation, targetRotation, Time.deltaTime * blendSpeed);
+            float b = speaking ? Mathf.Sin(elapsed * 2.4f) : 0f;
+            upperBodyBone.localRotation = Quaternion.Slerp(upperBodyBone.localRotation,
+                upperBodyRestRot * Quaternion.Euler(b * 1.5f, 0f, b * 1.0f),
+                Time.deltaTime * blendSpeed);
         }
 
-        // ── Bob vertical ușor al corpului ──
+        // Bob vertical ușor
         if (avatarRoot != null && !walkActive)
         {
-            float bob = speaking ? Mathf.Sin(elapsed * 3.2f) * 0.018f : 0f;
-            Vector3 targetPosition = avatarRootRestPosition + Vector3.up * bob;
-            avatarRoot.localPosition = Vector3.Lerp(
-                avatarRoot.localPosition, targetPosition, Time.deltaTime * blendSpeed);
-            avatarRoot.localRotation = Quaternion.Slerp(
-                avatarRoot.localRotation, avatarRootRestRotation, Time.deltaTime * blendSpeed);
+            float bob = speaking ? Mathf.Sin(elapsed * 3.2f) * 0.016f : 0f;
+            avatarRoot.localPosition = Vector3.Lerp(avatarRoot.localPosition,
+                rootRestPos + Vector3.up * bob, Time.deltaTime * blendSpeed);
+            avatarRoot.localRotation = Quaternion.Slerp(avatarRoot.localRotation,
+                rootRestRot, Time.deltaTime * blendSpeed);
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Animație mers pe loc
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // Animații procedurale
+    // ════════════════════════════════════════════════════════════════════════
 
     private void UpdateWalk()
     {
-        const float secondsPerStep = 0.36f;
-        const float returnDuration = 0.30f;
-        float elapsed = Time.time - walkStartedAt;
-        float walkDuration = walkSteps * secondsPerStep;
+        const float SPP = 0.36f;   // secunde per pas
+        const float RET = 0.30f;   // durata revenire
+        float e   = Time.time - walkStart;
+        float dur = walkSteps * SPP;
 
-        if (elapsed < walkDuration)
+        if (e < dur)
         {
-            float phase = elapsed * Mathf.PI * 2f / (secondsPerStep * 2f);
-            float legSwing = Mathf.Sin(phase);
-            SetBoneRotation(leftLegBone, leftLegRestRotation, legSwing * 22f);
-            SetBoneRotation(rightLegBone, rightLegRestRotation, -legSwing * 22f);
-            SetBoneRotation(leftArmBone, leftArmRestRotation, -legSwing * 15f);
-            SetBoneRotation(rightArmBone, rightArmRestRotation, legSwing * 15f);
-
+            float phase = e * Mathf.PI * 2f / (SPP * 2f);
+            float swing = Mathf.Sin(phase);
+            RotateBone(leftLegBone,  leftLegRestRot,   swing * 22f);
+            RotateBone(rightLegBone, rightLegRestRot, -swing * 22f);
+            RotateBone(leftArmBone,  leftArmRestRot,  -swing * 15f);
+            RotateBone(rightArmBone, rightArmRestRot,  swing * 15f);
             if (avatarRoot != null)
-                avatarRoot.localPosition = avatarRootRestPosition + Vector3.up * (Mathf.Abs(legSwing) * 0.022f);
-
-            int completed = Mathf.Min(walkSteps, Mathf.FloorToInt(elapsed / secondsPerStep));
-            actionStatus = $"Avatar: pași {completed}/{walkSteps}";
+                avatarRoot.localPosition = rootRestPos + Vector3.up * (Mathf.Abs(swing) * 0.022f);
+            actionStatus = $"Avatar: pasi {Mathf.Min(walkSteps, Mathf.FloorToInt(e / SPP))}/{walkSteps}";
             return;
         }
 
-        float recovery = Mathf.Clamp01((elapsed - walkDuration) / returnDuration);
-        SetBoneRotation(leftLegBone, leftLegRestRotation, 0f, recovery);
-        SetBoneRotation(rightLegBone, rightLegRestRotation, 0f, recovery);
-        SetBoneRotation(leftArmBone, leftArmRestRotation, 0f, recovery);
-        SetBoneRotation(rightArmBone, rightArmRestRotation, 0f, recovery);
-
+        float rec = Mathf.Clamp01((e - dur) / RET);
+        RotateBone(leftLegBone,  leftLegRestRot,  0f, rec);
+        RotateBone(rightLegBone, rightLegRestRot, 0f, rec);
+        RotateBone(leftArmBone,  leftArmRestRot,  0f, rec);
+        RotateBone(rightArmBone, rightArmRestRot, 0f, rec);
         if (avatarRoot != null)
-            avatarRoot.localPosition = Vector3.Lerp(
-                avatarRoot.localPosition, avatarRootRestPosition, Time.deltaTime * blendSpeed);
-
-        if (recovery >= 1f)
-        {
-            walkActive = false;
-            actionStatus = $"Avatar: a terminat {walkSteps} pași.";
-        }
+            avatarRoot.localPosition = Vector3.Lerp(avatarRoot.localPosition, rootRestPos, Time.deltaTime * blendSpeed);
+        if (rec >= 1f) { walkActive = false; actionStatus = $"Avatar: a terminat {walkSteps} pasi."; }
     }
-
-    private void SetBoneRotation(Transform bone, Quaternion rest, float angle, float recovery = 0f)
-    {
-        if (bone == null)
-            return;
-
-        Quaternion target = rest * Quaternion.Euler(angle, 0f, 0f);
-        float t = Mathf.Max(Time.deltaTime * blendSpeed, recovery);
-        bone.localRotation = Quaternion.Slerp(bone.localRotation, target, t);
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Animație flotări
-    // ────────────────────────────────────────────────────────────────────────
 
     private void UpdatePushUps()
     {
-        const float transitionDuration = 0.65f;
-        const float repetitionDuration = 1.25f;
-        float elapsed = Time.time - pushUpStartedAt;
-        float exerciseDuration = pushUpRepetitions * repetitionDuration;
-        Quaternion floorRotation = avatarRootRestRotation * Quaternion.Euler(90f, 90f, 0f);
-        Vector3 floorPosition = avatarRootRestPosition + Vector3.up * 0.3f;
+        const float TRANS = 0.65f;
+        const float REP   = 1.25f;
+        float e    = Time.time - pushUpStart;
+        float dur  = pushUpReps * REP;
+        Quaternion floorRot = rootRestRot * Quaternion.Euler(90f, 90f, 0f);
+        Vector3    floorPos = rootRestPos + Vector3.up * 0.3f;
 
-        if (elapsed < transitionDuration)
+        if (e < TRANS)
         {
-            float blend = Mathf.SmoothStep(0f, 1f, elapsed / transitionDuration);
-            avatarRoot.localRotation = Quaternion.Slerp(avatarRootRestRotation, floorRotation, blend);
-            avatarRoot.localPosition = Vector3.Lerp(avatarRootRestPosition, floorPosition, blend);
+            float t = Mathf.SmoothStep(0f, 1f, e / TRANS);
+            avatarRoot.localRotation = Quaternion.Slerp(rootRestRot, floorRot, t);
+            avatarRoot.localPosition = Vector3.Lerp(rootRestPos, floorPos, t);
             return;
         }
-
-        if (elapsed < transitionDuration + exerciseDuration)
+        if (e < TRANS + dur)
         {
-            float exerciseTime = elapsed - transitionDuration;
-            float cycle = (exerciseTime % repetitionDuration) / repetitionDuration;
-            float lift = (1f + Mathf.Cos(cycle * Mathf.PI * 2f)) * 0.5f;
-            avatarRoot.localRotation = floorRotation;
-            avatarRoot.localPosition = floorPosition + Vector3.up * Mathf.Lerp(0.02f, 0.16f, lift);
-
-            int completed = Mathf.Min(
-                pushUpRepetitions,
-                Mathf.FloorToInt(exerciseTime / repetitionDuration) + (cycle > 0.8f ? 1 : 0));
-            actionStatus = $"Avatar: flotări {completed}/{pushUpRepetitions}";
+            float et    = e - TRANS;
+            float cycle = (et % REP) / REP;
+            float lift  = (1f + Mathf.Cos(cycle * Mathf.PI * 2f)) * 0.5f;
+            avatarRoot.localRotation = floorRot;
+            avatarRoot.localPosition = floorPos + Vector3.up * Mathf.Lerp(0.02f, 0.16f, lift);
+            int done = Mathf.Min(pushUpReps, Mathf.FloorToInt(et / REP) + (cycle > 0.8f ? 1 : 0));
+            actionStatus = $"Avatar: flotari {done}/{pushUpReps}";
             return;
         }
-
-        float returnProgress = Mathf.Clamp01(
-            (elapsed - transitionDuration - exerciseDuration) / transitionDuration);
-        float returnBlend = Mathf.SmoothStep(0f, 1f, returnProgress);
-        avatarRoot.localRotation = Quaternion.Slerp(floorRotation, avatarRootRestRotation, returnBlend);
-        avatarRoot.localPosition = Vector3.Lerp(floorPosition, avatarRootRestPosition, returnBlend);
-
-        if (returnProgress >= 1f)
-        {
-            pushUpActive = false;
-            actionStatus = $"Avatar: a terminat {pushUpRepetitions} flotări.";
-        }
+        float ret = Mathf.Clamp01((e - TRANS - dur) / TRANS);
+        avatarRoot.localRotation = Quaternion.Slerp(floorRot, rootRestRot, Mathf.SmoothStep(0f, 1f, ret));
+        avatarRoot.localPosition = Vector3.Lerp(floorPos, rootRestPos, ret);
+        if (ret >= 1f) { pushUpActive = false; actionStatus = $"Avatar: a terminat {pushUpReps} flotari."; }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Viseme lookup în timeline
-    // ────────────────────────────────────────────────────────────────────────
+    private void RotateBone(Transform bone, Quaternion rest, float angle, float recovery = 0f)
+    {
+        if (bone == null) return;
+        bone.localRotation = Quaternion.Slerp(bone.localRotation,
+            rest * Quaternion.Euler(angle, 0f, 0f),
+            Mathf.Max(Time.deltaTime * blendSpeed, recovery));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Viseme — lookup și aplicare
+    // ════════════════════════════════════════════════════════════════════════
 
     private AvatarViseme GetVisemeAt(float elapsed)
     {
         for (int i = 1; i < timeline.Count; i++)
-        {
-            if (elapsed < timeline[i].time)
-                return timeline[i - 1].viseme;
-        }
-
+            if (elapsed < timeline[i].time) return timeline[i - 1].viseme;
         return timeline.Count > 0 ? timeline[timeline.Count - 1].viseme : AvatarViseme.Rest;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Aplicare visemă — MATRICE COMPLETĂ cu toate shape-urile din specificație
-    // ────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Traduce o visemă în ponderi de blendshape și le aplică via Lerp.
-    /// Shape-urile inactive sunt aduse explicit la 0 pentru a evita deformările.
-    /// </summary>
     private void ApplyViseme(AvatarViseme viseme)
     {
-        // ── Definim valorile țintă pentru fiecare shape relevant ──────────
-        // Blendshape-urile sunt normalizate la scala 0-100 (standard Unity).
-        // Dacă avatarul tău folosește 0-1, înmulțeste valorile cu 0.01f.
-
-        float jawOpen      = 0f;
-        float mouthFunnel  = 0f;   // buze rotunjite (O, U)
-        float mouthSmile   = 0f;   // colțuri ridicate (E, I, AE)
-        float mouthClose   = 0f;   // buze complet închise (B, M, P)
-        float mouthShrug   = 0f;   // buza inferioară coborâtă (F, V)
-        float mouthPucker  = 0f;   // buze strânse în față (W, OO)
-        float mouthStretch = 0f;   // dinți vizibili (L, D, T, N, S)
+        float jawOpen = 0f, mouthFunnel = 0f, mouthSmile = 0f, mouthClose = 0f;
+        float mouthShrug = 0f, mouthPucker = 0f, mouthStretch = 0f;
 
         switch (viseme)
         {
-            // ── Vocale deschise rotunde: A, AH, O, UH, Ă, Â, Î ──────────
             case AvatarViseme.OpenRound:
-                jawOpen     = 28f;
-                mouthFunnel = 18f;
-                break;
+                jawOpen = 28f; mouthFunnel = 18f; break;
+            case AvatarViseme.RhubarbA:
+                jawOpen = 32f; mouthFunnel = 10f; break;
+            case AvatarViseme.RhubarbD:
+                jawOpen = 28f; mouthSmile = 10f; break;
 
-            // ── Vocale medii laterale: E, EH, AE, I ──────────────────────
             case AvatarViseme.MidSpread:
-                jawOpen    = 16f;
-                mouthSmile = 20f;
-                break;
+            case AvatarViseme.RhubarbC:
+                jawOpen = 16f; mouthSmile = 20f; break;
+            case AvatarViseme.RhubarbE:
+                jawOpen = 16f; mouthSmile = 22f; break;
 
-            // ── Ocluzive bilabiale: B, M, P ──────────────────────────────
             case AvatarViseme.Closed:
-                mouthClose = 55f;
-                jawOpen    =  0f;
-                break;
+            case AvatarViseme.RhubarbB:
+                mouthClose = 55f; break;
 
-            // ── Labiodentale: F, V ────────────────────────────────────────
             case AvatarViseme.TeethOnLip:
-                mouthShrug = 30f;
-                jawOpen    =  5f;
-                break;
+            case AvatarViseme.RhubarbF:
+                mouthShrug = 30f; jawOpen = 5f; break;
 
-            // ── Labiale rotunjite: W, OO ──────────────────────────────────
             case AvatarViseme.Pucker:
-                mouthPucker = 40f;
-                jawOpen     =  8f;
-                break;
+            case AvatarViseme.RhubarbH:
+                mouthPucker = 40f; jawOpen = 8f; break;
 
-            // ── Consoane alveolare/dentale: L, D, T, N, S, Ș, Z ─────────
+            case AvatarViseme.RhubarbCh:
+                jawOpen = 10f; mouthPucker = 12f; mouthStretch = 8f; break;
+
+            case AvatarViseme.RhubarbRr:
+                jawOpen = 12f; mouthStretch = 8f; break;
+
             case AvatarViseme.Consonant:
             case AvatarViseme.RhubarbDd:
             case AvatarViseme.RhubarbNn:
             case AvatarViseme.RhubarbSs:
             case AvatarViseme.RhubarbTh:
-                jawOpen      =  8f;
-                mouthStretch = 14f;
-                break;
+                jawOpen = 8f; mouthStretch = 14f; break;
 
-            // ── CH, SH (affricate) ────────────────────────────────────────
-            case AvatarViseme.RhubarbCh:
-                jawOpen      = 10f;
-                mouthPucker  = 12f;
-                mouthStretch =  8f;
-                break;
-
-            // ── R (trilateral) ────────────────────────────────────────────
-            case AvatarViseme.RhubarbRr:
-                jawOpen      = 12f;
-                mouthStretch =  8f;
-                break;
-
-            // ── K, G, H (velare) ──────────────────────────────────────────
             case AvatarViseme.RhubarbKk:
-            case AvatarViseme.RhubarbC:  // Rhubarb 'C' = EE
-            case AvatarViseme.RhubarbG:  // Rhubarb 'G' = KK
-                jawOpen      = 10f;
-                mouthStretch = 10f;
-                break;
+            case AvatarViseme.RhubarbG:
+                jawOpen = 10f; mouthStretch = 10f; break;
 
-            // ── Rhubarb A = gură larg deschisă ────────────────────────────
-            case AvatarViseme.RhubarbA:
-                jawOpen     = 32f;
-                mouthFunnel = 10f;
-                break;
-
-            // ── Rhubarb B = buze închise ──────────────────────────────────
-            case AvatarViseme.RhubarbB:
-                mouthClose = 50f;
-                jawOpen    =  0f;
-                break;
-
-            // ── Rhubarb D = vocala deschisă ───────────────────────────────
-            case AvatarViseme.RhubarbD:
-                jawOpen    = 28f;
-                mouthSmile = 10f;
-                break;
-
-            // ── Rhubarb E = vocala medie ──────────────────────────────────
-            case AvatarViseme.RhubarbE:
-                jawOpen    = 16f;
-                mouthSmile = 22f;
-                break;
-
-            // ── Rhubarb F = F/V ───────────────────────────────────────────
-            case AvatarViseme.RhubarbF:
-                mouthShrug = 28f;
-                jawOpen    =  5f;
-                break;
-
-            // ── Rhubarb H = W/OO ──────────────────────────────────────────
-            case AvatarViseme.RhubarbH:
-                mouthPucker = 38f;
-                jawOpen     =  6f;
-                break;
-
-            // ── Rest și TeethOnLip cu jaw mic ─────────────────────────────
-            case AvatarViseme.Rest:
-            default:
-                // Toate rămân la 0 → buza la pauză
-                break;
+            // Rest și default → tot la 0
         }
 
-        // ── Trimitem toate valorile la SetShape — cele la 0 sunt resetate ──
-        SetShape("jawopen",      jawOpen);
-        SetShape("mouthfunnel",  mouthFunnel);
-        SetShape("mouthsmile",   mouthSmile);
-        SetShape("mouthsmilel",  mouthSmile);    // alias stânga
-        SetShape("mouthsmiler",  mouthSmile);    // alias dreapta
-        SetShape("mouthclose",   mouthClose);
+        SetShape("jawopen",         jawOpen);
+        SetShape("mouthfunnel",     mouthFunnel);
+        SetShape("mouthsmile",      mouthSmile);
+        SetShape("mouthclose",      mouthClose);
         SetShape("mouthshruglower", mouthShrug);
-        SetShape("mouthpucker",  mouthPucker);
-        SetShape("mouthstretch", mouthStretch);
-        SetShape("mouthstretchl", mouthStretch);
-        SetShape("mouthstretchr", mouthStretch);
+        SetShape("mouthpucker",     mouthPucker);
+        SetShape("mouthstretch",    mouthStretch);
     }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // SetShape cu Lerp și tracking al valorii curente
-    // ────────────────────────────────────────────────────────────────────────
 
     private void SetShape(string shape, float target)
     {
-        if (!shapeBindings.TryGetValue(shape, out List<ShapeBinding> bindings))
-            return;
+        if (!shapeBindings.TryGetValue(shape, out var bindings)) return;
 
         currentShapeValues.TryGetValue(shape, out float current);
         float next = Mathf.Lerp(current, target, Time.deltaTime * blendSpeed);
         currentShapeValues[shape] = next;
 
-        for (int i = 0; i < bindings.Count; i++)
+        foreach (var b in bindings)
         {
-            ShapeBinding binding = bindings[i];
-            if (binding.renderer == null || binding.renderer.sharedMesh == null ||
-                binding.index >= binding.renderer.sharedMesh.blendShapeCount)
+            if (b.renderer == null || b.renderer.sharedMesh == null ||
+                b.index >= b.renderer.sharedMesh.blendShapeCount)
             {
                 if (!warnedAboutInvalidRenderer)
                 {
-                    Debug.LogWarning(
-                        "Un mesh al avatarului nu mai are blendshape-urile încărcate. " +
-                        "Reîncarcă scena pentru a-l reimporta.", this);
+                    Debug.LogWarning("[Avatar] Blendshape invalid — reîncarcă scena.", this);
                     warnedAboutInvalidRenderer = true;
                 }
-
                 continue;
             }
-
-            binding.renderer.SetBlendShapeWeight(binding.index, next);
+            b.renderer.SetBlendShapeWeight(b.index, next);
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Cacheing blendshapes — detecție robustă a mesh-ului feței
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // Cache blendshapes — fără duplicate
+    // ════════════════════════════════════════════════════════════════════════
 
     private void CacheBlendShapes()
     {
-        SkinnedMeshRenderer[] allRenderers = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var all = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        if (all.Length == 0) { Debug.LogWarning("[Avatar] Niciun SkinnedMeshRenderer găsit.", this); return; }
 
-        if (allRenderers.Length == 0)
-        {
-            Debug.LogWarning("Nu am găsit niciun SkinnedMeshRenderer în avatar.", this);
-            return;
-        }
-
-        // Dacă face renderer-ul a fost setat manual în Inspector, folosim doar ăla
-        if (faceRenderer != null)
-        {
-            IndexRendererShapes(faceRenderer);
-
-#if UNITY_EDITOR
-            if (logBlendShapeNames)
-                LogCachedShapes();
-#endif
-            return;
-        }
-
-        // ── Strategie de detecție automată ──────────────────────────────
-        // Prioritate 1: mesh numit exact "AvatarHead"
-        foreach (SkinnedMeshRenderer candidate in allRenderers)
-        {
-            if (string.Equals(candidate.gameObject.name, "AvatarHead", StringComparison.OrdinalIgnoreCase))
-            {
-                faceRenderer = candidate;
-                break;
-            }
-        }
-
-        // Prioritate 2: orice mesh care conține "head" sau "face" în nume
+        // Detecție mesh față
         if (faceRenderer == null)
         {
-            foreach (SkinnedMeshRenderer candidate in allRenderers)
-            {
-                string n = candidate.gameObject.name;
-                if (n.IndexOf("head", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    n.IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0)
+            // 1. Exact "AvatarHead"
+            foreach (var r in all)
+                if (r.gameObject.name.Equals("AvatarHead", StringComparison.OrdinalIgnoreCase))
+                { faceRenderer = r; break; }
+
+            // 2. Conține "head" sau "face"
+            if (faceRenderer == null)
+                foreach (var r in all)
                 {
-                    faceRenderer = candidate;
-                    break;
+                    string n = r.gameObject.name;
+                    if (n.IndexOf("head", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        n.IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0)
+                    { faceRenderer = r; break; }
+                }
+
+            // 3. Mesh cu cei mai mulți blendshapes
+            if (faceRenderer == null)
+            {
+                int max = -1;
+                foreach (var r in all)
+                {
+                    if (r.sharedMesh == null) continue;
+                    int c = r.sharedMesh.blendShapeCount;
+                    if (c > max) { max = c; faceRenderer = r; }
                 }
             }
         }
 
-        // Prioritate 3: mesh-ul cu cei mai mulți blendshapes (cel mai probabil fața)
         if (faceRenderer == null)
         {
-            int maxShapes = -1;
-            foreach (SkinnedMeshRenderer candidate in allRenderers)
-            {
-                if (candidate.sharedMesh == null)
-                    continue;
-
-                int count = candidate.sharedMesh.blendShapeCount;
-                if (count > maxShapes)
-                {
-                    maxShapes = count;
-                    faceRenderer = candidate;
-                }
-            }
+            Debug.LogWarning("[Avatar] Nu am găsit mesh-ul feței. Setează Face Renderer manual în Inspector.", this);
+            return;
         }
 
-        if (faceRenderer != null)
-        {
-            Debug.Log($"[AvatarVisemeAnimator] Mesh față detectat: '{faceRenderer.gameObject.name}' " +
-                      $"({(faceRenderer.sharedMesh != null ? faceRenderer.sharedMesh.blendShapeCount : 0)} blendshapes).", this);
-            IndexRendererShapes(faceRenderer);
-        }
-        else
-        {
-            Debug.LogWarning(
-                "[AvatarVisemeAnimator] Nu am putut identifica mesh-ul feței. " +
-                "Setează manual câmpul 'Face Renderer' în Inspector.", this);
-        }
+        Debug.Log($"[Avatar] Mesh față: '{faceRenderer.gameObject.name}' " +
+                  $"({faceRenderer.sharedMesh?.blendShapeCount ?? 0} blendshapes).", this);
+
+        IndexRenderer(faceRenderer);
 
 #if UNITY_EDITOR
-        if (logBlendShapeNames)
-            LogCachedShapes();
+        if (logBlendShapeNames) LogShapes();
 #endif
     }
 
-    /// <summary>Indexează toate blendshape-urile dintr-un renderer și le adaugă în dicționar.</summary>
-    private void IndexRendererShapes(SkinnedMeshRenderer renderer)
+    /// <summary>
+    /// Indexează blendshape-urile unui renderer.
+    /// Aliasuri Left/Right sunt adăugate NUMAI dacă shape-ul de bază (fără sufix)
+    /// nu există deja ca shape independent — evitând aplicarea dublă.
+    /// </summary>
+    private void IndexRenderer(SkinnedMeshRenderer r)
     {
-        if (renderer == null || renderer.sharedMesh == null)
-            return;
+        if (r?.sharedMesh == null) return;
+        var mesh = r.sharedMesh;
 
-        int count = renderer.sharedMesh.blendShapeCount;
-        for (int i = 0; i < count; i++)
+        // Pasul 1: înregistrează toate shape-urile reale
+        var rawNames = new string[mesh.blendShapeCount];
+        for (int i = 0; i < mesh.blendShapeCount; i++)
         {
-            string rawName = renderer.sharedMesh.GetBlendShapeName(i);
-            string normalized = NormalizeName(rawName);
-            AddShapeBinding(normalized, renderer, i);
+            string norm = Norm(mesh.GetBlendShapeName(i));
+            rawNames[i] = norm;
+            realShapeNames.Add(norm);
+        }
 
-            // Adăugăm și variante fără sufixul lateral (Left/Right) pentru a
-            // simplifica adresarea uniformă a ambelor jumătăți ale feței
-            if (normalized.EndsWith("left", StringComparison.Ordinal))
-                AddShapeBinding(normalized.Substring(0, normalized.Length - 4), renderer, i);
-            else if (normalized.EndsWith("right", StringComparison.Ordinal))
-                AddShapeBinding(normalized.Substring(0, normalized.Length - 5), renderer, i);
+        // Pasul 2: adaugă binding-uri + aliasuri fără sufix lateral
+        for (int i = 0; i < mesh.blendShapeCount; i++)
+        {
+            string norm = rawNames[i];
+            Bind(norm, r, i);
 
-            // Alias "l" / "r" suffix (ex: "mouthsmilel", "mouthsmiler")
-            if (normalized.Length > 1 && normalized[normalized.Length - 1] == 'l')
-                AddShapeBinding(normalized.Substring(0, normalized.Length - 1), renderer, i);
-            else if (normalized.Length > 1 && normalized[normalized.Length - 1] == 'r')
-                AddShapeBinding(normalized.Substring(0, normalized.Length - 1), renderer, i);
+            // Sufix "Left"/"Right" — 4/5 litere
+            string baseL = null, baseR = null;
+            if (norm.EndsWith("left",  StringComparison.Ordinal)) baseL = norm.Substring(0, norm.Length - 4);
+            if (norm.EndsWith("right", StringComparison.Ordinal)) baseR = norm.Substring(0, norm.Length - 5);
+            // Sufix "l"/"r" — 1 literă (mouthsmilel, mouthsmiler etc.)
+            if (baseL == null && norm.Length > 2 && norm[norm.Length - 1] == 'l')
+                baseL = norm.Substring(0, norm.Length - 1);
+            if (baseR == null && norm.Length > 2 && norm[norm.Length - 1] == 'r')
+                baseR = norm.Substring(0, norm.Length - 1);
+
+            // Adaugă alias NUMAI dacă shape-ul de bază nu există ca shape real
+            // (evitând duplicate când avatarul are ATÂT "MouthSmile" CÂT ȘI "MouthSmileLeft")
+            if (baseL != null && !realShapeNames.Contains(baseL)) Bind(baseL, r, i);
+            if (baseR != null && !realShapeNames.Contains(baseR)) Bind(baseR, r, i);
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Cacheing oase
-    // ────────────────────────────────────────────────────────────────────────
+    private void Bind(string key, SkinnedMeshRenderer r, int idx)
+    {
+        if (!shapeBindings.TryGetValue(key, out var list))
+        {
+            list = new List<ShapeBinding>();
+            shapeBindings[key] = list;
+        }
+        // Deduplicare (renderer + index)
+        foreach (var b in list)
+            if (b.renderer == r && b.index == idx) return;
+        list.Add(new ShapeBinding { renderer = r, index = idx });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Cache oase
+    // ════════════════════════════════════════════════════════════════════════
 
     private void CacheHeadBone()
     {
-        Transform[] transforms = GetComponentsInChildren<Transform>(true);
-        foreach (Transform candidate in transforms)
+        foreach (var t in GetComponentsInChildren<Transform>(true))
         {
-            string boneName = candidate.name;
-            int separator = boneName.LastIndexOf(':');
-            if (separator >= 0)
-                boneName = boneName.Substring(separator + 1);
-
-            if (string.Equals(boneName, "head", StringComparison.OrdinalIgnoreCase))
-            {
-                headBone = candidate;
-                headRestRotation = candidate.localRotation;
-                return;
-            }
+            string n = t.name;
+            int sep = n.LastIndexOf(':'); if (sep >= 0) n = n.Substring(sep + 1);
+            if (n.Equals("head", StringComparison.OrdinalIgnoreCase))
+            { headBone = t; headRestRot = t.localRotation; return; }
         }
     }
 
     private void CacheUpperBodyBone()
     {
-        Transform[] transforms = GetComponentsInChildren<Transform>(true);
-        foreach (Transform candidate in transforms)
+        foreach (var t in GetComponentsInChildren<Transform>(true))
         {
-            string n = candidate.name;
-            if (string.Equals(n, "Spine2", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(n, "Chest", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(n, "Spine1", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(n, "UpperChest", StringComparison.OrdinalIgnoreCase))
-            {
-                upperBodyBone = candidate;
-                upperBodyRestRotation = candidate.localRotation;
-                return;
-            }
+            string n = t.name;
+            if (n.Equals("Spine2",      StringComparison.OrdinalIgnoreCase) ||
+                n.Equals("Spine1",      StringComparison.OrdinalIgnoreCase) ||
+                n.Equals("Chest",       StringComparison.OrdinalIgnoreCase) ||
+                n.Equals("UpperChest",  StringComparison.OrdinalIgnoreCase))
+            { upperBodyBone = t; upperBodyRestRot = t.localRotation; return; }
         }
     }
 
     private void CacheWalkBones()
     {
-        Transform[] transforms = GetComponentsInChildren<Transform>(true);
-        foreach (Transform candidate in transforms)
+        // Caută în tot sub-arborele (inclusiv avatarRoot dacă e setat)
+        var root = avatarRoot != null ? avatarRoot : transform;
+        foreach (var t in root.GetComponentsInChildren<Transform>(true))
         {
-            // Stripuim prefixul namespace (ex: "mixamorig:LeftUpLeg" → "LeftUpLeg")
-            string boneName = candidate.name;
-            int separator = boneName.LastIndexOf(':');
-            if (separator >= 0)
-                boneName = boneName.Substring(separator + 1);
-
-            switch (boneName)
+            string n = t.name;
+            int sep = n.LastIndexOf(':'); if (sep >= 0) n = n.Substring(sep + 1);
+            switch (n)
             {
-                case "LeftUpLeg":
-                case "LeftThigh":
-                case "L_Thigh":
-                    leftLegBone = candidate;
-                    leftLegRestRotation = candidate.localRotation;
+                case "LeftUpLeg":  case "LeftThigh":  case "L_Thigh":
+                case "LeftLeg":    case "Left_Thigh":
+                    leftLegBone = t; leftLegRestRot = t.localRotation; break;
+                case "RightUpLeg": case "RightThigh": case "R_Thigh":
+                case "RightLeg":   case "Right_Thigh":
+                    rightLegBone = t; rightLegRestRot = t.localRotation; break;
+                case "LeftArm":    case "LeftShoulder": case "L_Arm":
+                case "Left_Arm":   case "LeftForeArm":
+                    if (leftArmBone == null) { leftArmBone = t; leftArmRestRot = t.localRotation; }
                     break;
-                case "RightUpLeg":
-                case "RightThigh":
-                case "R_Thigh":
-                    rightLegBone = candidate;
-                    rightLegRestRotation = candidate.localRotation;
-                    break;
-                case "LeftArm":
-                case "LeftShoulder_end":
-                case "L_Arm":
-                    leftArmBone = candidate;
-                    leftArmRestRotation = candidate.localRotation;
-                    break;
-                case "RightArm":
-                case "RightShoulder_end":
-                case "R_Arm":
-                    rightArmBone = candidate;
-                    rightArmRestRotation = candidate.localRotation;
+                case "RightArm":   case "RightShoulder": case "R_Arm":
+                case "Right_Arm":  case "RightForeArm":
+                    if (rightArmBone == null) { rightArmBone = t; rightArmRestRot = t.localRotation; }
                     break;
             }
         }
@@ -735,69 +535,32 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private void RestoreMovementPose()
     {
-        if (avatarRoot != null)
-        {
-            avatarRoot.localPosition = avatarRootRestPosition;
-            avatarRoot.localRotation = avatarRootRestRotation;
-        }
-
-        if (leftLegBone != null)   leftLegBone.localRotation   = leftLegRestRotation;
-        if (rightLegBone != null)  rightLegBone.localRotation  = rightLegRestRotation;
-        if (leftArmBone != null)   leftArmBone.localRotation   = leftArmRestRotation;
-        if (rightArmBone != null)  rightArmBone.localRotation  = rightArmRestRotation;
-        if (headBone != null)      headBone.localRotation      = headRestRotation;
-        if (upperBodyBone != null) upperBodyBone.localRotation = upperBodyRestRotation;
+        if (avatarRoot    != null) { avatarRoot.localPosition    = rootRestPos;       avatarRoot.localRotation    = rootRestRot; }
+        if (leftLegBone   != null)   leftLegBone.localRotation   = leftLegRestRot;
+        if (rightLegBone  != null)   rightLegBone.localRotation  = rightLegRestRot;
+        if (leftArmBone   != null)   leftArmBone.localRotation   = leftArmRestRot;
+        if (rightArmBone  != null)   rightArmBone.localRotation  = rightArmRestRot;
+        if (headBone      != null)   headBone.localRotation      = headRestRot;
+        if (upperBodyBone != null)   upperBodyBone.localRotation = upperBodyRestRot;
     }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Reset și utilitare
-    // ────────────────────────────────────────────────────────────────────────
 
     private void ResetFaceBlendShapes()
     {
-        if (faceRenderer == null || faceRenderer.sharedMesh == null)
-            return;
-
+        if (faceRenderer?.sharedMesh == null) return;
         for (int i = 0; i < faceRenderer.sharedMesh.blendShapeCount; i++)
             faceRenderer.SetBlendShapeWeight(i, 0f);
-
         currentShapeValues.Clear();
     }
 
-    private void AddShapeBinding(string shape, SkinnedMeshRenderer renderer, int index)
-    {
-        if (!shapeBindings.TryGetValue(shape, out List<ShapeBinding> bindings))
-        {
-            bindings = new List<ShapeBinding>();
-            shapeBindings.Add(shape, bindings);
-        }
-
-        for (int i = 0; i < bindings.Count; i++)
-        {
-            if (bindings[i].renderer == renderer && bindings[i].index == index)
-                return; // evitare duplicare
-        }
-
-        bindings.Add(new ShapeBinding { renderer = renderer, index = index });
-    }
-
-    /// <summary>Normalizează un nume de blendshape: elimină spații, '_', '-' și converteste la lowercase.</summary>
-    private static string NormalizeName(string name)
-    {
-        return name.Replace("_", string.Empty)
-                   .Replace("-", string.Empty)
-                   .Replace(" ", string.Empty)
-                   .Replace(".", string.Empty)
-                   .ToLowerInvariant();
-    }
+    private static string Norm(string name) =>
+        name.Replace("_", "").Replace("-", "").Replace(" ", "").Replace(".", "").ToLowerInvariant();
 
 #if UNITY_EDITOR
-    private void LogCachedShapes()
+    private void LogShapes()
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"[AvatarVisemeAnimator] {shapeBindings.Count} blendshape keys indexate:");
-        foreach (var key in shapeBindings.Keys)
-            sb.AppendLine($"  {key}");
+        sb.AppendLine($"[Avatar] {shapeBindings.Count} blendshape keys:");
+        foreach (var k in shapeBindings.Keys) sb.AppendLine($"  {k}");
         Debug.Log(sb.ToString(), this);
     }
 #endif
