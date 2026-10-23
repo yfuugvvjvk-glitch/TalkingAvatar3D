@@ -1,5 +1,7 @@
 using System;
+using System;
 using System.IO;
+using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using GLTFast;
@@ -17,6 +19,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
     private string prompt = string.Empty;
     private int speechLanguageIndex;
     private string loadStatus = "Se încarcă avatarul...";
+    private string ollamaStatus = "Ollama: se verifică...";
     private Vector2 chatScroll;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -52,6 +55,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         chat.audioSource = audioSource;
         chat.avatarAnimator = avatarAnimator;
 
+        CheckOllamaAsync();
         await LoadAvatar();
     }
 
@@ -110,6 +114,28 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         avatarImport = null;
     }
 
+    /// <summary>Verifică dacă Ollama este pornit și actualizează statusul în UI.</summary>
+    private async void CheckOllamaAsync()
+    {
+        ollamaStatus = "Ollama: se verifică...";
+        try
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://localhost:11434/");
+            req.Timeout = 3000;
+            req.Method = "GET";
+            using (var resp = (HttpWebResponse)await req.GetResponseAsync())
+            {
+                ollamaStatus = resp.StatusCode == HttpStatusCode.OK
+                    ? "Ollama: ✓ pornit (localhost:11434)"
+                    : $"Ollama: răspuns {(int)resp.StatusCode}";
+            }
+        }
+        catch
+        {
+            ollamaStatus = "⚠ Ollama nu rulează! Pornește: ollama serve";
+        }
+    }
+
     private void OnGUI()
     {
         float width = Mathf.Min(440f, Screen.width - 24f);
@@ -120,7 +146,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         GUILayout.BeginArea(new Rect(panel.x + 14f, panel.y + 12f, panel.width - 28f, panel.height - 24f));
         GUILayout.Label("TALKING AVATAR 3D", TitleStyle());
         GUILayout.Label(loadStatus);
-        GUILayout.Label(chat != null && chat.IsStreaming ? "Ollama generează răspunsul..." : "Ollama: localhost:11434");
+        GUILayout.Label(chat != null && chat.IsStreaming ? "Ollama: generează răspunsul..." : ollamaStatus);
         if (chat != null)
         {
             GUILayout.Label(chat.SpeechStatus);
