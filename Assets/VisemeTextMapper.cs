@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>
-/// Enumerează visemele posibile ale avatarului.
-/// Prefixul Rhubarb* corespunde literelor A-H din protocolul Rhubarb Lip Sync.
+/// Visemele posibile ale avatarului.
+/// Prefixul Rhubarb* corespunde literelor A–H din protocolul Rhubarb Lip Sync.
 /// </summary>
 public enum AvatarViseme
 {
@@ -23,172 +23,337 @@ public enum AvatarViseme
     RhubarbNn,   // N
     RhubarbA,    // Rhubarb A  = gură larg deschisă
     RhubarbB,    // Rhubarb B  = buze complet închise
-    RhubarbC,    // Rhubarb C  = EE (sunet „i" strâns)
+    RhubarbC,    // Rhubarb C  = EE
     RhubarbD,    // Rhubarb D  = vocală deschisă
     RhubarbE,    // Rhubarb E  = vocală medie
     RhubarbF,    // Rhubarb F  = F / V
-    RhubarbG,    // Rhubarb G  = kk (velare)
+    RhubarbG,    // Rhubarb G  = velare kk
     RhubarbH     // Rhubarb H  = W / OO
 }
 
 [Serializable]
-public class RhubarbTimeline
-{
-    public RhubarbCue[] mouthCues;
-}
+public class RhubarbTimeline { public RhubarbCue[] mouthCues; }
 
 [Serializable]
-public class RhubarbCue
-{
-    public float start;
-    public float end;
-    public string value;
-}
+public class RhubarbCue { public float start; public float end; public string value; }
 
-/// <summary>O intrare în timeline-ul visemelor: moment de timp + visemă activă de la acel moment.</summary>
 public struct VisemeFrame
 {
     public float time;
     public AvatarViseme viseme;
-
-    public VisemeFrame(float time, AvatarViseme viseme)
-    {
-        this.time = time;
-        this.viseme = viseme;
-    }
+    public VisemeFrame(float t, AvatarViseme v) { time = t; viseme = v; }
 }
 
 /// <summary>
-/// Construiește timeline-uri de viseme fie din date Rhubarb (JSON),
-/// fie direct din text prin analiză fonematică (română/engleză).
+/// Construiește timeline-uri de viseme din:
+///   1. Date Rhubarb Lip Sync (JSON cu cue-uri timed A–H) — cea mai precisă metodă
+///   2. G2P pentru engleză (tabel de pronunție pentru cuvinte neregulate + reguli grafemice)
+///   3. Reguli silabice pentru română (segmentare V/CV/CCV + ponderi nucleu silabic)
 /// </summary>
 public static class VisemeTextMapper
 {
-    // ────────────────────────────────────────────────────────────────────────
-    // Timeline din date Rhubarb Lip Sync (JSON)
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // 1. RHUBARB TIMELINE
+    // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Parsează JSON-ul returnat de Rhubarb și construiește un timeline precis.
-    /// Returnează o listă goală dacă datele sunt invalide (caz în care se va folosi fallback-ul text).
-    /// </summary>
     public static List<VisemeFrame> CreateRhubarbTimeline(string json, float duration)
     {
-        List<VisemeFrame> frames = new List<VisemeFrame>();
-        if (string.IsNullOrWhiteSpace(json) || duration <= 0f)
-            return frames;
+        var frames = new List<VisemeFrame>();
+        if (string.IsNullOrWhiteSpace(json) || duration <= 0f) return frames;
 
         RhubarbTimeline result;
-        try
-        {
-            result = UnityEngine.JsonUtility.FromJson<RhubarbTimeline>(json);
-        }
-        catch
-        {
-            return frames;
-        }
+        try { result = UnityEngine.JsonUtility.FromJson<RhubarbTimeline>(json); }
+        catch { return frames; }
 
-        if (result == null || result.mouthCues == null || result.mouthCues.Length == 0)
-            return frames;
+        if (result?.mouthCues == null || result.mouthCues.Length == 0) return frames;
 
-        float previousStart = -1f;
-        for (int i = 0; i < result.mouthCues.Length; i++)
+        float prev = -1f;
+        foreach (var cue in result.mouthCues)
         {
-            RhubarbCue cue = result.mouthCues[i];
             if (cue == null || cue.start < 0f || cue.start > duration ||
-                cue.end < cue.start || cue.start < previousStart)
-                return new List<VisemeFrame>(); // date corupte → fallback
-
-            if (!TryMapRhubarbShape(cue.value, out AvatarViseme viseme))
+                cue.end < cue.start || cue.start < prev)
                 return new List<VisemeFrame>();
-
-            frames.Add(new VisemeFrame(cue.start, viseme));
-            previousStart = cue.start;
+            if (!TryMapRhubarbShape(cue.value, out AvatarViseme v))
+                return new List<VisemeFrame>();
+            frames.Add(new VisemeFrame(cue.start, v));
+            prev = cue.start;
         }
 
-        if (frames.Count == 0)
-            return frames;
-
-        if (frames[0].time > 0f)
-            frames.Insert(0, new VisemeFrame(0f, AvatarViseme.Rest));
+        if (frames.Count == 0) return frames;
+        if (frames[0].time > 0f) frames.Insert(0, new VisemeFrame(0f, AvatarViseme.Rest));
         if (frames[frames.Count - 1].time < duration)
             frames.Add(new VisemeFrame(duration, AvatarViseme.Rest));
-
         return frames;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Timeline estimat din text (fallback când Rhubarb nu e disponibil)
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // 2. TEXT-BASED TIMELINE (G2P engleză + silabificare română)
+    // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Descompune textul în unități fonetice, le atribuie viseme și le distribuie
-    /// proporțional în timp pe durata audio-ului.
-    /// </summary>
     public static List<VisemeFrame> CreateTimeline(string text, float duration, string language)
     {
-        List<VisemeFrame> frames = new List<VisemeFrame>();
-        if (string.IsNullOrWhiteSpace(text) || duration <= 0f)
-            return frames;
+        var frames = new List<VisemeFrame>();
+        if (string.IsNullOrWhiteSpace(text) || duration <= 0f) return frames;
 
-        List<string> units = GetUnits(text, language);
-        if (units.Count == 0)
-            return frames;
+        var units = GetUnits(text, language);
+        if (units.Count == 0) return frames;
 
-        float totalWeight = 0f;
-        for (int i = 0; i < units.Count; i++)
-            totalWeight += GetWeight(units[i]);
+        float total = 0f;
+        foreach (var u in units) total += GetWeight(u);
+        if (total <= 0f) return frames;
 
-        if (totalWeight <= 0f)
-            return frames;
-
-        float elapsedWeight = 0f;
-        for (int i = 0; i < units.Count; i++)
+        float elapsed = 0f;
+        foreach (var u in units)
         {
-            string unit = units[i];
-            frames.Add(new VisemeFrame(duration * elapsedWeight / totalWeight, MapUnit(unit)));
-            elapsedWeight += GetWeight(unit);
+            frames.Add(new VisemeFrame(duration * elapsed / total, MapUnit(u)));
+            elapsed += GetWeight(u);
         }
-
         frames.Add(new VisemeFrame(duration, AvatarViseme.Rest));
         return frames;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Segmentare text în unități fonetice
-    // ────────────────────────────────────────────────────────────────────────
-
-    // Vocale românești (incluzând diacritice)
-    private static readonly System.Collections.Generic.HashSet<char> RomanianVowels =
-        new System.Collections.Generic.HashSet<char>
-        {
-            'a', 'e', 'i', 'o', 'u',
-            '\u0103', // ă
-            '\u00e2', // â
-            '\u00ee'  // î
-        };
+    // ════════════════════════════════════════════════════════════════════════
+    // 3. G2P ENGLEZĂ — tabel de pronunție pentru cuvinte neregulate
+    //    (grapheme-to-phoneme pentru engleză fără librării externe)
+    //    Fonemele sunt codificate ca secvențe de unități vizeme.
+    // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Parcurge textul și extrage unități fonetice.
-    /// Română: aplică reguli silabice (V, CV, CCV) conform ortografiei românești —
-    ///         consoanele sunt ataşate vocalei următoare, iar vocala primeşte pondere
-    ///         mai mare pentru a reprezenta silaba.
-    /// Engleză: grupează digrame fonetice (th, sh, wh, diftonguri).
+    /// Tabel G2P pentru cuvintele englezești cu pronunție neregulată.
+    /// Valoarea este secvența de unități fonetice (mapate în MapUnit).
+    /// Acoperă cele mai frecvente ~300 cuvinte cu litere mute sau pronunție surprinzătoare.
     /// </summary>
+    private static readonly Dictionary<string, string[]> EnglishG2P =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Litere mute celebre
+        { "the",      new[]{"th","e"}        },
+        { "a",        new[]{"uh"}            },
+        { "an",       new[]{"uh","n"}        },
+        { "and",      new[]{"ae","n","d"}    },
+        { "are",      new[]{"ah","r"}        },
+        { "or",       new[]{"aw","r"}        },
+        { "of",       new[]{"uh","v"}        },
+        { "to",       new[]{"t","oo"}        },
+        { "do",       new[]{"d","oo"}        },
+        { "you",      new[]{"y","oo"}        },
+        { "your",     new[]{"y","aw","r"}    },
+        { "who",      new[]{"h","oo"}        },
+        { "whose",    new[]{"h","oo","z"}    },
+        { "what",     new[]{"w","ah","t"}    },
+        { "where",    new[]{"w","eh","r"}    },
+        { "when",     new[]{"w","eh","n"}    },
+        { "why",      new[]{"w","ah","ee"}   },
+        { "how",      new[]{"h","ah","w"}    },
+        { "now",      new[]{"n","ah","w"}    },
+        { "know",     new[]{"n","oh"}        },
+        { "knew",     new[]{"n","y","oo"}    },
+        { "knife",    new[]{"n","ah","ee","f"}  },
+        { "knight",   new[]{"n","ah","ee","t"}  },
+        { "knock",    new[]{"n","ah","k"}    },
+        { "knee",     new[]{"n","ee"}        },
+        { "knowledge",new[]{"n","ah","l","eh","j"}},
+        { "write",    new[]{"r","ah","ee","t"}   },
+        { "wrong",    new[]{"r","aw","ng"}   },
+        { "wrist",    new[]{"r","ih","s","t"}},
+        { "wrap",     new[]{"r","ae","p"}    },
+        { "would",    new[]{"w","uh","d"}    },
+        { "could",    new[]{"k","uh","d"}    },
+        { "should",   new[]{"sh","uh","d"}   },
+        { "was",      new[]{"w","ah","z"}    },
+        { "has",      new[]{"h","ae","z"}    },
+        { "have",     new[]{"h","ae","v"}    },
+        { "give",     new[]{"g","ih","v"}    },
+        { "live",     new[]{"l","ih","v"}    },
+        { "love",     new[]{"l","ah","v"}    },
+        { "come",     new[]{"k","ah","m"}    },
+        { "some",     new[]{"s","ah","m"}    },
+        { "home",     new[]{"h","oh","m"}    },
+        { "gone",     new[]{"g","aw","n"}    },
+        { "done",     new[]{"d","ah","n"}    },
+        { "one",      new[]{"w","ah","n"}    },
+        { "once",     new[]{"w","ah","n","s"}},
+        { "none",     new[]{"n","ah","n"}    },
+        { "phone",    new[]{"f","oh","n"}    },
+        { "photo",    new[]{"f","oh","t","oh"}},
+        { "enough",   new[]{"ih","n","ah","f"}  },
+        { "rough",    new[]{"r","ah","f"}    },
+        { "tough",    new[]{"t","ah","f"}    },
+        { "through",  new[]{"th","r","oo"}   },
+        { "though",   new[]{"th","oh"}       },
+        { "thought",  new[]{"th","aw","t"}   },
+        { "bought",   new[]{"b","aw","t"}    },
+        { "brought",  new[]{"b","r","aw","t"}},
+        { "caught",   new[]{"k","aw","t"}    },
+        { "taught",   new[]{"t","aw","t"}    },
+        { "daughter", new[]{"d","aw","t","er"}  },
+        { "laugh",    new[]{"l","ae","f"}    },
+        { "half",     new[]{"h","ae","f"}    },
+        { "calf",     new[]{"k","ae","f"}    },
+        { "calm",     new[]{"k","ah","m"}    },
+        { "palm",     new[]{"p","ah","m"}    },
+        { "walk",     new[]{"w","aw","k"}    },
+        { "talk",     new[]{"t","aw","k"}    },
+        { "chalk",    new[]{"ch","aw","k"}   },
+        { "folk",     new[]{"f","oh","k"}    },
+        { "yolk",     new[]{"y","oh","k"}    },
+        { "could've", new[]{"k","uh","d","uh","v"}},
+        { "said",     new[]{"s","eh","d"}    },
+        { "says",     new[]{"s","eh","z"}    },
+        { "again",    new[]{"uh","g","eh","n"}  },
+        { "against",  new[]{"uh","g","eh","n","s","t"}},
+        { "many",     new[]{"m","eh","n","ee"}  },
+        { "any",      new[]{"eh","n","ee"}   },
+        { "very",     new[]{"v","eh","r","ee"}  },
+        { "every",    new[]{"eh","v","r","ee"}  },
+        { "pretty",   new[]{"p","r","ih","t","ee"}},
+        { "women",    new[]{"w","ih","m","ih","n"}},
+        { "woman",    new[]{"w","uh","m","uh","n"}},
+        { "people",   new[]{"p","ee","p","uh","l"}},
+        { "their",    new[]{"th","eh","r"}   },
+        { "there",    new[]{"th","eh","r"}   },
+        { "they",     new[]{"th","ay"}       },
+        { "them",     new[]{"th","eh","m"}   },
+        { "then",     new[]{"th","eh","n"}   },
+        { "this",     new[]{"th","ih","s"}   },
+        { "that",     new[]{"th","ae","t"}   },
+        { "with",     new[]{"w","ih","th"}   },
+        { "which",    new[]{"w","ih","ch"}   },
+        { "these",    new[]{"th","ee","z"}   },
+        { "those",    new[]{"th","oh","z"}   },
+        { "other",    new[]{"ah","th","er"}  },
+        { "another",  new[]{"uh","n","ah","th","er"}},
+        { "either",   new[]{"ee","th","er"}  },
+        { "neither",  new[]{"n","ee","th","er"}},
+        { "whether",  new[]{"w","eh","th","er"}},
+        { "weather",  new[]{"w","eh","th","er"}},
+        { "water",    new[]{"w","aw","t","er"}  },
+        { "later",    new[]{"l","ay","t","er"}  },
+        { "letter",   new[]{"l","eh","t","er"}  },
+        { "better",   new[]{"b","eh","t","er"}  },
+        { "butter",   new[]{"b","ah","t","er"}  },
+        { "before",   new[]{"b","ih","f","aw","r"}},
+        { "because",  new[]{"b","ih","k","ah","z"}},
+        { "between",  new[]{"b","ih","t","w","ee","n"}},
+        { "right",    new[]{"r","ah","ee","t"}  },
+        { "night",    new[]{"n","ah","ee","t"}  },
+        { "light",    new[]{"l","ah","ee","t"}  },
+        { "fight",    new[]{"f","ah","ee","t"}  },
+        { "might",    new[]{"m","ah","ee","t"}  },
+        { "sight",    new[]{"s","ah","ee","t"}  },
+        { "tight",    new[]{"t","ah","ee","t"}  },
+        { "high",     new[]{"h","ah","ee"}   },
+        { "sign",     new[]{"s","ah","ee","n"}  },
+        { "assign",   new[]{"uh","s","ah","ee","n"}},
+        { "design",   new[]{"d","ih","z","ah","ee","n"}},
+        { "science",  new[]{"s","ah","ee","uh","n","s"}},
+        { "island",   new[]{"ah","ee","l","uh","n","d"}},
+        { "listen",   new[]{"l","ih","s","uh","n"}},
+        { "often",    new[]{"aw","f","uh","n"}  },
+        { "soften",   new[]{"s","aw","f","uh","n"}},
+        { "fasten",   new[]{"f","ae","s","uh","n"}},
+        { "castle",   new[]{"k","ae","s","uh","l"}},
+        { "whistle",  new[]{"w","ih","s","uh","l"}},
+        { "muscle",   new[]{"m","ah","s","uh","l"}},
+        { "colonel",  new[]{"k","er","n","uh","l"}},
+        { "iron",     new[]{"ah","ee","er","n"} },
+        { "hour",     new[]{"ah","w","er"}    },
+        { "honest",   new[]{"ah","n","ih","s","t"}},
+        { "honor",    new[]{"ah","n","er"}    },
+        { "herb",     new[]{"er","b"}         },
+        { "heir",     new[]{"eh","r"}         },
+        { "here",     new[]{"h","ih","r"}     },
+        { "hear",     new[]{"h","ih","r"}     },
+        { "heart",    new[]{"h","ah","r","t"} },
+        { "earth",    new[]{"er","th"}        },
+        { "early",    new[]{"er","l","ee"}    },
+        { "work",     new[]{"w","er","k"}     },
+        { "word",     new[]{"w","er","d"}     },
+        { "world",    new[]{"w","er","l","d"} },
+        { "worry",    new[]{"w","er","ee"}    },
+        { "worse",    new[]{"w","er","s"}     },
+        { "worth",    new[]{"w","er","th"}    },
+        { "call",     new[]{"k","aw","l"}     },
+        { "fall",     new[]{"f","aw","l"}     },
+        { "ball",     new[]{"b","aw","l"}     },
+        { "wall",     new[]{"w","aw","l"}     },
+        { "hall",     new[]{"h","aw","l"}     },
+        { "all",      new[]{"aw","l"}         },
+        { "always",   new[]{"aw","l","w","ay","z"}},
+        { "already",  new[]{"aw","l","r","eh","d","ee"}},
+        { "also",     new[]{"aw","l","s","oh"}},
+        { "almost",   new[]{"aw","l","m","oh","s","t"}},
+        { "although", new[]{"aw","l","th","oh"}},
+        { "altogether",new[]{"aw","l","t","uh","g","eh","th","er"}},
+        { "picture",  new[]{"p","ih","k","ch","er"}},
+        { "future",   new[]{"f","y","oo","ch","er"}},
+        { "nature",   new[]{"n","ay","ch","er"}},
+        { "feature",  new[]{"f","ee","ch","er"}},
+        { "measure",  new[]{"m","eh","zh","er"}},
+        { "treasure", new[]{"t","r","eh","zh","er"}},
+        { "pleasure", new[]{"p","l","eh","zh","er"}},
+        { "usual",    new[]{"y","oo","zh","oo","uh","l"}},
+        { "vision",   new[]{"v","ih","zh","uh","n"}},
+        { "decision", new[]{"d","ih","s","ih","zh","uh","n"}},
+        { "question", new[]{"k","w","eh","s","ch","uh","n"}},
+        { "action",   new[]{"ae","k","sh","uh","n"}},
+        { "nation",   new[]{"n","ay","sh","uh","n"}},
+        { "station",  new[]{"s","t","ay","sh","uh","n"}},
+        { "situation",new[]{"s","ih","ch","oo","ay","sh","uh","n"}},
+        { "education",new[]{"eh","j","oo","k","ay","sh","uh","n"}},
+        { "information",new[]{"ih","n","f","er","m","ay","sh","uh","n"}},
+        { "important", new[]{"ih","m","p","aw","r","t","uh","n","t"}},
+        { "different", new[]{"d","ih","f","r","uh","n","t"}},
+        { "everything",new[]{"eh","v","r","ee","th","ih","ng"}},
+        { "something", new[]{"s","ah","m","th","ih","ng"}},
+        { "nothing",  new[]{"n","ah","th","ih","ng"}},
+        { "anything", new[]{"eh","n","ee","th","ih","ng"}},
+        { "everything",new[]{"eh","v","r","ee","th","ih","ng"}},
+        { "language", new[]{"l","ae","ng","g","w","ih","j"}},
+        { "avatar",   new[]{"ae","v","uh","t","ah","r"}},
+        { "computer", new[]{"k","uh","m","p","y","oo","t","er"}},
+        { "program",  new[]{"p","r","oh","g","r","ae","m"}},
+        { "algorithm",new[]{"ae","l","g","uh","r","ih","th","uh","m"}},
+        { "beautiful",new[]{"b","y","oo","t","ih","f","uh","l"}},
+        { "people",   new[]{"p","ee","p","uh","l"}},
+        { "really",   new[]{"r","ee","uh","l","ee"}},
+        { "actually", new[]{"ae","k","ch","oo","uh","l","ee"}},
+        { "probably", new[]{"p","r","ah","b","uh","b","l","ee"}},
+        { "obviously",new[]{"ah","b","v","ee","uh","s","l","ee"}},
+        { "especially",new[]{"ih","s","p","eh","sh","uh","l","ee"}},
+        { "generally",new[]{"j","eh","n","r","uh","l","ee"}},
+        { "usually",  new[]{"y","oo","zh","oo","uh","l","ee"}},
+        { "naturally",new[]{"n","ae","ch","r","uh","l","ee"}},
+        { "literally",new[]{"l","ih","t","r","uh","l","ee"}},
+        { "basically",new[]{"b","ay","s","ih","k","l","ee"}},
+        { "certainly",new[]{"s","er","t","uh","n","l","ee"}},
+    };
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 4. SEGMENTARE TEXT → UNITĂȚI FONETICE
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Vocale românești (cu diacritice)
+    private static readonly HashSet<char> RomanianVowels = new HashSet<char>
+    {
+        'a','e','i','o','u',
+        '\u0103', // ă
+        '\u00e2', // â
+        '\u00ee'  // î
+    };
+
     private static List<string> GetUnits(string text, string language)
     {
-        List<string> units = new List<string>();
-        string normalized = NormalizeText(text);
         bool isRomanian = IsRomanian(language);
+        string normalized = text.ToLowerInvariant();
+        var units = new List<string>();
 
         if (isRomanian)
         {
-            // ── Română: reguli silabice V, CV, CCV ───────────────────────
-            // Regulă: Parcurgem cuvintele; la fiecare vocală emitem mai întâi
-            // consoanele buferate (ca unități individuale), apoi vocala.
-            // Consoanele finale de cuvânt (coda) sunt emise după vocala precedentă.
-            // Digrame: ch→"ch", gh→"g" (fonetică românească).
-            List<string> consonantBuffer = new List<string>();
+            // ── Română: segmentare silabică V/CV/CCV ──────────────────────
+            // Buffer consoane (onset) → emis înainte de vocala nucleu.
+            // Coda (consoanele finale de silabă/cuvânt) e emisă imediat.
+            var consonantBuf = new List<string>();
 
             for (int i = 0; i < normalized.Length; i++)
             {
@@ -196,199 +361,255 @@ public static class VisemeTextMapper
 
                 if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
                 {
-                    // Flushăm consoanele rămase (coda ultimei silabe) înaintea pauzei
-                    foreach (string con in consonantBuffer)
-                        units.Add(con);
-                    consonantBuffer.Clear();
+                    foreach (var con in consonantBuf) units.Add(con);
+                    consonantBuf.Clear();
                     units.Add(c.ToString());
                     continue;
                 }
+                if (!char.IsLetter(c)) continue;
 
-                if (!char.IsLetter(c))
-                    continue;
-
-                // Digrame ch și gh
+                // Digrame ch, gh
                 if (i + 1 < normalized.Length)
                 {
-                    string pair = normalized.Substring(i, 2);
-                    if (pair == "ch") { consonantBuffer.Add("ch"); i++; continue; }
-                    if (pair == "gh") { consonantBuffer.Add("g");  i++; continue; }
+                    string p2 = normalized.Substring(i, 2);
+                    if (p2 == "ch") { consonantBuf.Add("ch"); i++; continue; }
+                    if (p2 == "gh") { consonantBuf.Add("g");  i++; continue; }
                 }
 
                 if (RomanianVowels.Contains(c))
                 {
-                    // Vocală — emitem consoanele buferate (onset), apoi vocala
-                    foreach (string con in consonantBuffer)
-                        units.Add(con);
-                    consonantBuffer.Clear();
+                    // Vocală → flush onset + vocală
+                    foreach (var con in consonantBuf) units.Add(con);
+                    consonantBuf.Clear();
                     units.Add(c.ToString());
                 }
                 else
                 {
-                    // Consoană — o bufferăm
-                    consonantBuffer.Add(c.ToString());
+                    consonantBuf.Add(c.ToString());
                 }
             }
-
-            // Consoanele rămase la finalul textului
-            foreach (string con in consonantBuffer)
-                units.Add(con);
+            // Consoane finale
+            foreach (var con in consonantBuf) units.Add(con);
         }
         else
         {
-            // ── Engleză: digrame fonetice și diftonguri ───────────────────
-            for (int i = 0; i < normalized.Length; i++)
-            {
-                char c = normalized[i];
+            // ── Engleză: G2P pe cuvinte + reguli grafemice fallback ───────
+            // Tokenizăm în cuvinte și procesăm fiecare:
+            // - dacă e în tabelul G2P → fonemele exacte
+            // - altfel → reguli grafemice (digrame + corespondenţe)
 
+            int pos = 0;
+            while (pos < normalized.Length)
+            {
+                char c = normalized[pos];
+
+                // Spații și punctuație
                 if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
                 {
                     units.Add(c.ToString());
+                    pos++;
                     continue;
                 }
 
-                if (!char.IsLetter(c))
-                    continue;
+                if (!char.IsLetter(c)) { pos++; continue; }
 
-                if (i + 1 < normalized.Length)
+                // Extragem cuvântul curent (litere + apostrofe pentru contractions)
+                int wordStart = pos;
+                while (pos < normalized.Length &&
+                       (char.IsLetter(normalized[pos]) || normalized[pos] == '\''))
+                    pos++;
+                string word = normalized.Substring(wordStart, pos - wordStart).Trim('\'');
+
+                if (EnglishG2P.TryGetValue(word, out string[] phonemes))
                 {
-                    string pair = normalized.Substring(i, 2);
-                    if (pair == "th") { units.Add("th"); i++; continue; }
-                    if (pair == "sh") { units.Add("ch"); i++; continue; }
-                    if (pair == "wh") { units.Add("w");  i++; continue; }
-                    if (pair == "ah" || pair == "ae" || pair == "eh" ||
-                        pair == "ee" || pair == "uh" || pair == "oo")
-                    {
-                        units.Add(pair);
-                        i++;
-                        continue;
-                    }
+                    // Cuvânt cu pronunție G2P cunoscută
+                    foreach (var ph in phonemes)
+                        units.Add(ph);
                 }
-
-                units.Add(c.ToString());
+                else
+                {
+                    // Fallback: reguli grafemice pe cuvânt
+                    ApplyEnglishGraphemeRules(word, units);
+                }
             }
         }
 
         return units;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Mapare unitate fonetică → visemă
-    // ────────────────────────────────────────────────────────────────────────
-
     /// <summary>
-    /// Matrice de mapare completă pentru română și engleză.
-    /// Diacriticele românești sunt tratate explicit.
+    /// Aplică reguli grafemice pentru engleză pe un singur cuvânt.
+    /// Acoperă: digrame fonetice, vocale silențioase finale, pattern-uri comune.
     /// </summary>
+    private static void ApplyEnglishGraphemeRules(string word, List<string> units)
+    {
+        int i = 0;
+        while (i < word.Length)
+        {
+            // Perechi de 2 caractere
+            if (i + 1 < word.Length)
+            {
+                string p2 = word.Substring(i, 2);
+                switch (p2)
+                {
+                    case "th": units.Add("th"); i += 2; continue;
+                    case "sh": units.Add("ch"); i += 2; continue;
+                    case "ch": units.Add("ch"); i += 2; continue;
+                    case "wh": units.Add("w");  i += 2; continue;
+                    case "ph": units.Add("f");  i += 2; continue;  // phone → f
+                    case "gh":
+                        // gh mut la finalul cuvintelor (night, fight) sau gh=g
+                        if (i + 2 >= word.Length || word[i + 2] == 't')
+                        { i += 2; continue; } // silențios
+                        units.Add("g"); i += 2; continue;
+                    case "ck": units.Add("k");  i += 2; continue;
+                    case "ng": units.Add("n");  i += 2; continue;  // ring → n final
+                    case "mb":
+                        // b mut la final (lamb, bomb)
+                        if (i + 2 >= word.Length) { units.Add("m"); i += 2; continue; }
+                        goto default;
+                    case "kn": units.Add("n");  i += 2; continue;  // knife → n
+                    case "wr": units.Add("r");  i += 2; continue;  // write → r
+                    case "gn":
+                        if (i == 0) { units.Add("n"); i += 2; continue; } // gnat
+                        goto default;
+                    case "qu": units.Add("k"); units.Add("w"); i += 2; continue; // queen
+                    case "oo": units.Add("oo"); i += 2; continue;
+                    case "ee": units.Add("ee"); i += 2; continue;
+                    case "ea":
+                        // ea = "ee" în majoritatea cazurilor (eat, read)
+                        units.Add("ee"); i += 2; continue;
+                    case "ou":
+                        // ou = "ow" (out) sau "oo" (you) — default "ow"
+                        units.Add("ah"); i += 2; continue;
+                    case "ow":
+                        units.Add("oh"); i += 2; continue;  // snow, show
+                    case "oi": units.Add("oy"); i += 2; continue;
+                    case "oy": units.Add("oy"); i += 2; continue;
+                    case "ai":
+                    case "ay": units.Add("ay"); i += 2; continue;
+                    case "ey": units.Add("ay"); i += 2; continue;  // they, hey
+                    case "ie":
+                        units.Add("ee"); i += 2; continue;         // piece, field
+                    case "ei":
+                        units.Add("ay"); i += 2; continue;         // eight, vein
+                    case "ue":
+                        units.Add("oo"); i += 2; continue;         // blue, true
+                    case "ui":
+                        units.Add("oo"); i += 2; continue;         // fruit, juice
+                    case "ew":
+                        units.Add("y"); units.Add("oo"); i += 2; continue; // new, few
+                    case "aw":
+                        units.Add("aw"); i += 2; continue;
+                    case "au":
+                        units.Add("aw"); i += 2; continue;
+                    case "ar":
+                        units.Add("ah"); units.Add("r"); i += 2; continue;
+                    case "er":
+                    case "ir":
+                    case "ur":
+                        units.Add("er"); i += 2; continue;
+                    case "or":
+                        units.Add("aw"); units.Add("r"); i += 2; continue;
+                }
+            }
+
+            char ch = word[i];
+
+            // Vocala finală silențioasă: e la finalul cuvântului după consoană
+            if (ch == 'e' && i == word.Length - 1 && i > 0 && !IsVowel(word[i - 1]))
+            {
+                i++; continue; // "e" mut (make, like, home)
+            }
+
+            units.Add(ch.ToString());
+            i++;
+        }
+    }
+
+    private static bool IsVowel(char c) =>
+        c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 5. MAPARE UNITATE FONETICĂ → VISEMĂ
+    // ════════════════════════════════════════════════════════════════════════
+
     private static AvatarViseme MapUnit(string unit)
     {
-        if (unit == null || unit.Length == 0)
-            return AvatarViseme.Rest;
+        if (string.IsNullOrEmpty(unit)) return AvatarViseme.Rest;
 
         switch (unit)
         {
-            // ── Vocale deschise / rotunde ──────────────────────────────────
-            // Română: A, Ă, Â, Î, O, U
-            // Engleză: A, O, UH, AH
-            case "a":
-            case "\u0103": // ă
-            case "\u00e2": // â
-            case "\u00ee": // î (ca literă inițială sau corp de cuvânt)
-            case "o":
-            case "u":
-            case "ah":
-            case "uh":
+            // ── Vocale deschise/rotunde ──────────────────────────────────
+            case "a": case "\u0103": case "\u00e2": case "\u00ee":
+            case "o": case "u": case "ah": case "uh": case "aw": case "oh":
                 return AvatarViseme.OpenRound;
 
-            // ── Vocale medii / laterale ────────────────────────────────────
-            // Română: E, I   |   Engleză: E, I, AE, EE, EH
-            case "e":
-            case "i":
-            case "ae":
-            case "ee":
-            case "eh":
+            // ── Vocale medii/laterale ─────────────────────────────────────
+            case "e": case "i": case "ae": case "ee": case "eh":
+            case "ih": case "ay": case "oy":
                 return AvatarViseme.MidSpread;
 
-            // ── Ocluzive bilabiale → buze închise ─────────────────────────
-            case "b":
-            case "m":
-            case "p":
+            // ── Ocluzive bilabiale ────────────────────────────────────────
+            case "b": case "m": case "p":
                 return AvatarViseme.Closed;
 
-            // ── Labiodentale ───────────────────────────────────────────────
-            case "f":
-            case "v":
+            // ── Labiodentale ──────────────────────────────────────────────
+            case "f": case "v":
                 return AvatarViseme.TeethOnLip;
 
-            // ── Labiale rotunjite ──────────────────────────────────────────
-            case "w":
-            case "oo":
+            // ── Labiale rotunjite ─────────────────────────────────────────
+            case "w": case "oo": case "y":
                 return AvatarViseme.Pucker;
 
-            // ── Africate / Siflante CH ─────────────────────────────────────
-            case "ch":
-            case "\u0219": // ș (s cu virgulă — literă română)
-            case "\u015f": // ş (s cu sedilă — variantă)
+            // ── CH, SH (affricate / siflantă palatală) ────────────────────
+            case "ch": case "sh": case "zh":
+            case "\u0219": case "\u015f": // ș român
                 return AvatarViseme.RhubarbCh;
 
-            // ── Alveolare D, T, L ──────────────────────────────────────────
-            case "d":
-            case "t":
-            case "\u0163": // ț (t cu virgulă)
-            case "\u021b": // ț (t cu virgulă — standard unicode)
-            case "l":
+            // ── D, T, L (alveolare) ───────────────────────────────────────
+            case "d": case "t": case "l":
+            case "\u0163": case "\u021b": // ț român
                 return AvatarViseme.RhubarbDd;
 
-            // ── Vibrantă R ────────────────────────────────────────────────
-            case "r":
+            // ── R (vibrantă) ──────────────────────────────────────────────
+            case "r": case "er":
                 return AvatarViseme.RhubarbRr;
 
-            // ── Siflante S, Z ──────────────────────────────────────────────
-            case "s":
-            case "z":
+            // ── S, Z (siflante) ───────────────────────────────────────────
+            case "s": case "z":
                 return AvatarViseme.RhubarbSs;
 
-            // ── TH englezesc ───────────────────────────────────────────────
+            // ── TH (engleză) ──────────────────────────────────────────────
             case "th":
                 return AvatarViseme.RhubarbTh;
 
-            // ── Velare K, G, H, C (uneori) ───────────────────────────────
-            case "k":
-            case "g":
-            case "h":
-            case "c":
+            // ── K, G, H (velare) ──────────────────────────────────────────
+            case "k": case "g": case "h": case "c": case "ng":
                 return AvatarViseme.RhubarbKk;
 
-            // ── Nazală N ──────────────────────────────────────────────────
+            // ── N (nazală) ────────────────────────────────────────────────
             case "n":
                 return AvatarViseme.RhubarbNn;
 
-            // ── Pauze / spații / punctuație ───────────────────────────────
-            case " ":
-            case "\t":
-            case "\n":
-            case "\r":
-            case ".":
-            case "!":
-            case "?":
-            case ",":
-            case ";":
-            case ":":
+            // ── Pauze ─────────────────────────────────────────────────────
+            case " ": case "\t": case "\n": case "\r":
+            case ".": case "!": case "?": case ",": case ";": case ":":
+            case "-": case "—": case "\"": case "'":
                 return AvatarViseme.Rest;
 
-            // ── Orice altă consoană (j, q, x, y etc.) ────────────────────
             default:
                 return AvatarViseme.Consonant;
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Mapare Rhubarb A-H, X
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // 6. RHUBARB A–H MAP
+    // ════════════════════════════════════════════════════════════════════════
 
-    private static bool TryMapRhubarbShape(string value, out AvatarViseme viseme)
+    private static bool TryMapRhubarbShape(string v, out AvatarViseme viseme)
     {
-        switch (value)
+        switch (v)
         {
             case "A": viseme = AvatarViseme.RhubarbA; return true;
             case "B": viseme = AvatarViseme.RhubarbB; return true;
@@ -403,48 +624,35 @@ public static class VisemeTextMapper
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Utilitare
-    // ────────────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // 7. PONDERI TEMPORALE
+    // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Ponderea temporală a unei unități.
-    /// Vocalele primesc mai mult timp (reprezintă nucleul silabei),
-    /// consoanele mai puțin, spațiile/punctuația adaugă pauze naturale.
-    /// </summary>
     private static float GetWeight(string unit)
     {
-        if (unit.Length == 1 && char.IsWhiteSpace(unit[0]))
-            return 2.0f;
-        if (unit.Length == 1 && char.IsPunctuation(unit[0]))
-            return 1.2f;
-        // Vocale deschise românești (nucleul silabei) — durată mai mare
+        if (unit.Length == 1 && char.IsWhiteSpace(unit[0])) return 2.0f;
+        if (unit.Length == 1 && char.IsPunctuation(unit[0])) return 1.2f;
+
         char ch = unit[0];
+        // Vocale deschise (nucleu silabic) — timp mai lung
         if (ch == 'a' || ch == 'o' || ch == 'u' ||
-            ch == '\u0103' || ch == '\u00e2' || ch == '\u00ee')
-            return 2.2f;
-        // Vocale medii
-        if (ch == 'e' || ch == 'i')
-            return 1.8f;
-        // Diftonguri englezești
-        if (unit == "ah" || unit == "uh" || unit == "oo" || unit == "ee")
-            return 2.2f;
-        if (unit == "ae" || unit == "eh")
-            return 1.8f;
+            ch == '\u0103' || ch == '\u00e2' || ch == '\u00ee') return 2.2f;
+        if (ch == 'e' || ch == 'i') return 1.8f;
+        // Diftonguri și vocale englezești lungi
+        if (unit == "ah" || unit == "uh" || unit == "oo" || unit == "ee" ||
+            unit == "aw" || unit == "oh" || unit == "ay" || unit == "er") return 2.2f;
+        if (unit == "ae" || unit == "eh" || unit == "ih" || unit == "oy") return 1.8f;
+
         return unit.Length; // consoane și digrame
     }
 
-    /// <summary>Converteste textul la lowercase păstrând diacriticele.</summary>
-    private static string NormalizeText(string text)
-    {
-        return text.ToLowerInvariant();
-    }
+    // ════════════════════════════════════════════════════════════════════════
+    // 8. UTILITARE
+    // ════════════════════════════════════════════════════════════════════════
 
     private static bool IsRomanian(string language)
     {
-        if (string.IsNullOrEmpty(language))
-            return true; // default la română dacă nu e specificat
-
+        if (string.IsNullOrEmpty(language)) return true;
         return language.StartsWith("ro", StringComparison.OrdinalIgnoreCase) ||
                language.StartsWith("roman", StringComparison.OrdinalIgnoreCase);
     }
