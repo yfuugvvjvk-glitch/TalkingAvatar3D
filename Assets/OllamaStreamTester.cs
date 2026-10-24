@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 public class OllamaStreamTester : MonoBehaviour
 {
     [Header("Setări Ollama")]
-    public string modelName = "qwen2.5:7b";
+    public string modelName = "qwen2.5:3b";
 
     [Header("Setări TTS")]
     public bool speakResponses = true;
