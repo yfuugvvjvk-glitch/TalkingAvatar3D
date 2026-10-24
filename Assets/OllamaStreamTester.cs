@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 public class OllamaStreamTester : MonoBehaviour
 {
     [Header("Setări Ollama")]
-    public string modelName = "qwen2.5:3b";
+    public string modelName = "qwen2.5:7b";
 
     [Header("Setări TTS")]
     public bool speakResponses = true;
@@ -384,12 +384,18 @@ public class OllamaStreamTester : MonoBehaviour
         bool ro = speechLanguage.StartsWith("ro", StringComparison.OrdinalIgnoreCase) ||
                   speechLanguage.StartsWith("román", StringComparison.OrdinalIgnoreCase);
         if (ro)
-            return "Ești un asistent vocal pentru un avatar 3D. Răspunde scurt, 1-2 propoziții, " +
-                   "în română cu diacritice. Nu refuza comenzi de animație — ele sunt gestionate de cod, nu de tine. " +
-                   "Dacă utilizatorul cere o mișcare, confirmă scurt că avatarul o face.";
-        return "You are a voice assistant for a 3D avatar. Reply briefly, 1-2 sentences. " +
-               "Never refuse animation commands — they are handled by code, not you. " +
-               "If the user requests a movement, briefly confirm the avatar is doing it.";
+            return "Ești un asistent conversațional inteligent pentru un avatar 3D. " +
+                   "Răspunde în română cu diacritice corecte. Poți răspunde la orice întrebare — " +
+                   "geografie (unde e ecuatorul, capitale, munți), știință, istorie, povești inventate, " +
+                   "glume, explicații complexe. Răspunde în 2-4 propoziții, natural și informativ. " +
+                   "Nu refuza nicio comandă de animație — ele sunt executate automat de cod. " +
+                   "Dacă ți se cere o poveste, inventează una creativă. " +
+                   "Dacă ți se cere să explici ceva, explică clar și interesant.";
+        return "You are an intelligent conversational assistant for a 3D avatar. " +
+               "Answer any question — geography (where is the equator, capitals, oceans), science, history, " +
+               "invented stories, jokes, complex explanations. Reply in 2-4 sentences, naturally and informatively. " +
+               "Never refuse animation commands — they are executed automatically by code. " +
+               "If asked for a story, invent a creative one. If asked to explain something, explain clearly.";
     }
 
     // ════════════════════════════════════════════════════════════════════════

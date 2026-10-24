@@ -12,7 +12,7 @@ set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 set "UNITY_EXE=C:\Program Files\Unity\Hub\Editor\6000.2.3f1\Editor\Unity.exe"
 set "PROJECT_DIR=%~dp0"
 set "TTS_DIR=%~dp0Tools\TtsService"
-set "OLLAMA_MODEL=qwen2.5:3b"
+set "OLLAMA_MODEL=qwen2.5:7b"
 
 REM ============================================================
 REM 1. Python
