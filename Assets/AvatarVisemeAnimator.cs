@@ -197,10 +197,18 @@ public class AvatarVisemeAnimator : MonoBehaviour
     public void ResetPosition()
     {
         if (avatarRoot == null) return;
+        // Resetam local position la pozitia initiala
         avatarRoot.localPosition = rootRestPos;
         avatarRoot.localRotation = rootRestRot;
+        // Resetam si parent-ul la origine daca s-a deplasat
+        if (avatarRoot.parent != null)
+        {
+            avatarRoot.parent.localPosition = Vector3.zero;
+            avatarRoot.parent.localRotation = Quaternion.identity;
+        }
         verticalVelocity = 0f;
         isGrounded = true;
+        actionStatus = "Pozitie resetata.";
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -354,16 +362,16 @@ public class AvatarVisemeAnimator : MonoBehaviour
         var kb = Keyboard.current;
         if (kb == null) return;
 
-        // ── BLOCAT cand userul scrie in campul de chat ────────────────────
+        // Blocat cand userul scrie in chat
         if (InputBlocked) return;
 
-        // ── Rotire stanga/dreapta (DOAR SAGETI — A/D rezervate pt chat) ──
-        float rot = 0f;
-        if (kb.leftArrowKey.isPressed)  rot = -1f;
-        if (kb.rightArrowKey.isPressed) rot =  1f;
-        if (rot != 0f) RotateAvatar(rot * 120f * Time.deltaTime);
+        // ── Rotire cu sagetile stanga/dreapta ─────────────────────────────
+        if (kb.leftArrowKey.isPressed)
+            avatarRoot.parent.Rotate(Vector3.up, -120f * Time.deltaTime, Space.World);
+        if (kb.rightArrowKey.isPressed)
+            avatarRoot.parent.Rotate(Vector3.up,  120f * Time.deltaTime, Space.World);
 
-        // ── Mers inainte/inapoi (DOAR SAGETI sus/jos) ────────────────────
+        // ── Mers inainte/inapoi cu sagetile sus/jos ───────────────────────
         float fwd = 0f;
         if (kb.upArrowKey.isPressed)   fwd =  1f;
         if (kb.downArrowKey.isPressed) fwd = -1f;
@@ -371,40 +379,51 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (fwd != 0f && !pushUpActive && !swimActive)
         {
             moveActive = true;
-            // Deplasare in directia in care priveste avatarul
-            Vector3 dir = avatarRoot.forward * (fwd * moveSpeed * Time.deltaTime);
-            avatarRoot.localPosition += dir;
-            rootRestPos = avatarRoot.localPosition; // actualizam ground level
+            // Miscare pe axa Z a parent-ului (sol plat)
+            Vector3 move = avatarRoot.parent.forward * (fwd * moveSpeed * Time.deltaTime);
+            avatarRoot.parent.position += move;
 
-            // Animatie mers: swing picioare + brate
-            walkPhase += Time.deltaTime * Mathf.PI * 2f / 0.76f; // 2 pasi/sec
+            // Animatie picioare + brate
+            walkPhase += Time.deltaTime * Mathf.PI * 2f / 0.76f;
             float sw = Mathf.Sin(walkPhase);
             BoneX(leftLegBone,   leftLegRestRot,   sw * 28f);
             BoneX(rightLegBone,  rightLegRestRot, -sw * 28f);
             BoneX(leftArmBone,   leftArmRestRot,  -sw * 20f);
             BoneX(rightArmBone,  rightArmRestRot,  sw * 20f);
-            avatarRoot.localPosition += Vector3.up * Mathf.Abs(sw) * 0.014f;
+            // Bob vertical mic sincronizat cu pasul
+            float bobY = rootRestPos.y + Mathf.Abs(sw) * 0.014f;
+            Vector3 p = avatarRoot.localPosition;
+            p.y = bobY;
+            avatarRoot.localPosition = p;
 
-            actionStatus = fwd > 0 ? "Mers inainte" : "Mers inapoi";
+            actionStatus = fwd > 0f ? "Mers inainte" : "Mers inapoi";
         }
         else
         {
             if (moveActive)
             {
-                // Revenim treptat la poza de rest
-                BoneX(leftLegBone,  leftLegRestRot,  0f, 0.1f);
-                BoneX(rightLegBone, rightLegRestRot, 0f, 0.1f);
-                BoneX(leftArmBone,  leftArmRestRot,  0f, 0.1f);
-                BoneX(rightArmBone, rightArmRestRot, 0f, 0.1f);
+                // Revenire picioare/brate la poza normala
+                BoneX(leftLegBone,  leftLegRestRot,  0f, 0.08f);
+                BoneX(rightLegBone, rightLegRestRot, 0f, 0.08f);
+                BoneX(leftArmBone,  leftArmRestRot,  0f, 0.08f);
+                BoneX(rightArmBone, rightArmRestRot, 0f, 0.08f);
+                // Revenim la Y-ul de rest
+                Vector3 p = avatarRoot.localPosition;
+                p.y = Mathf.Lerp(p.y, rootRestPos.y, Time.deltaTime * 8f);
+                avatarRoot.localPosition = p;
+                if (Mathf.Abs(p.y - rootRestPos.y) < 0.001f) moveActive = false;
             }
-            moveActive = false;
+            else
+            {
+                moveActive = false;
+            }
         }
 
-        // ── Saritura cu Space ─────────────────────────────────────────────
-        if (kb.spaceKey.wasPressedThisFrame && isGrounded && !pushUpActive)
+        // ── Salt Space ────────────────────────────────────────────────────
+        if (kb.spaceKey.wasPressedThisFrame && isGrounded && !pushUpActive && !swimActive)
             TriggerJump();
 
-        // ── Q/E — rotire cap ──────────────────────────────────────────────
+        // ── Q/E — rotire cap manual ───────────────────────────────────────
         if (headBone != null && !headRotActive)
         {
             if (kb.qKey.isPressed)
@@ -415,7 +434,7 @@ public class AvatarVisemeAnimator : MonoBehaviour
                     headRestRot * Quaternion.Euler(0f,  45f, 0f), Time.deltaTime * blendSpeed);
         }
 
-        // ── Taste animatii ────────────────────────────────────────────────
+        // ── Taste animatii (1-8) ──────────────────────────────────────────
         if (kb.digit1Key.wasPressedThisFrame) StartWaving();
         if (kb.digit2Key.wasPressedThisFrame) StartWalking(5);
         if (kb.digit3Key.wasPressedThisFrame) StartPushUps(3);
@@ -430,40 +449,40 @@ public class AvatarVisemeAnimator : MonoBehaviour
     {
         verticalVelocity = 4.5f;
         isGrounded = false;
-        // Brate ridicate la salt
         if (leftArmBone  != null) leftArmBone.localRotation  = leftArmRestRot  * Quaternion.Euler(0f, 0f, 50f);
         if (rightArmBone != null) rightArmBone.localRotation = rightArmRestRot * Quaternion.Euler(0f, 0f, -50f);
-        // Genunchi indoiti la decolare
         if (leftLegBone  != null) leftLegBone.localRotation  = leftLegRestRot  * Quaternion.Euler(-25f, 0f, 0f);
         if (rightLegBone != null) rightLegBone.localRotation = rightLegRestRot * Quaternion.Euler(-25f, 0f, 0f);
+        actionStatus = "Salt!";
     }
 
     private void ApplyGravityAndGround()
     {
-        if (avatarRoot == null) return;
+        if (avatarRoot == null || isGrounded) return;
 
-        if (!isGrounded)
+        verticalVelocity += gravity * Time.deltaTime;
+
+        // Modificam doar Y-ul local al avatarRoot
+        Vector3 pos = avatarRoot.localPosition;
+        pos.y += verticalVelocity * Time.deltaTime;
+
+        // Aterizare — nu trecem sub Y-ul de rest
+        if (pos.y <= rootRestPos.y)
         {
-            verticalVelocity += gravity * Time.deltaTime;
-            avatarRoot.localPosition += Vector3.up * verticalVelocity * Time.deltaTime;
-
-            // Aterizare
-            if (avatarRoot.localPosition.y <= groundY)
-            {
-                Vector3 p = avatarRoot.localPosition;
-                p.y = groundY;
-                avatarRoot.localPosition = p;
-                rootRestPos = p;
-                verticalVelocity = 0f;
-                isGrounded = true;
-                // Brate revin la natural la aterizare
-                SmoothBone(leftArmBone,  leftArmRestRot  * Quaternion.Euler(0f, 0f,  8f), 8f);
-                SmoothBone(rightArmBone, rightArmRestRot * Quaternion.Euler(0f, 0f, -8f), 8f);
-                // Genunchi revin
-                SmoothBone(leftLegBone,  leftLegRestRot,  8f);
-                SmoothBone(rightLegBone, rightLegRestRot, 8f);
-                actionStatus = "";
-            }
+            pos.y = rootRestPos.y;
+            avatarRoot.localPosition = pos;
+            verticalVelocity = 0f;
+            isGrounded = true;
+            // Revenire brate/picioare
+            SmoothBone(leftArmBone,  leftArmRestRot  * Quaternion.Euler(0f, 0f,  8f), 8f);
+            SmoothBone(rightArmBone, rightArmRestRot * Quaternion.Euler(0f, 0f, -8f), 8f);
+            SmoothBone(leftLegBone,  leftLegRestRot,  8f);
+            SmoothBone(rightLegBone, rightLegRestRot, 8f);
+            actionStatus = "";
+        }
+        else
+        {
+            avatarRoot.localPosition = pos;
         }
     }
 
