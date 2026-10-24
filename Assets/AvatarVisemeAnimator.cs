@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// Animatii procedurale avatar 3D (fara blendshapes — modelul nu are morph targets).
@@ -234,40 +235,44 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (avatarRoot == null) return;
 
         // Sageti si WASD — deplasare/rotire
+        // Folosim Keyboard din noul Input System
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb == null) return;
+
         float h = 0f, v = 0f;
-        if (Input.GetKey(KeyCode.LeftArrow)  || Input.GetKey(KeyCode.A)) h = -1f;
-        if (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) h =  1f;
-        if (Input.GetKey(KeyCode.UpArrow)    || Input.GetKey(KeyCode.W)) v =  1f;
-        if (Input.GetKey(KeyCode.DownArrow)  || Input.GetKey(KeyCode.S)) v = -1f;
+        if (kb.leftArrowKey.isPressed  || kb.aKey.isPressed) h = -1f;
+        if (kb.rightArrowKey.isPressed || kb.dKey.isPressed) h =  1f;
+        if (kb.upArrowKey.isPressed    || kb.wKey.isPressed) v =  1f;
+        if (kb.downArrowKey.isPressed  || kb.sKey.isPressed) v = -1f;
 
         if (h != 0f) RotateAvatar(h * 90f * Time.deltaTime);
         if (v != 0f)
         {
             avatarRoot.localPosition += Vector3.up * (v * 0.5f * Time.deltaTime);
-            rootRestPos = avatarRoot.localPosition; // actualizam rest-ul
+            rootRestPos = avatarRoot.localPosition;
         }
 
         // Q/E — rotire cap manual
         if (headBone != null && !headRotActive)
         {
-            if (Input.GetKey(KeyCode.Q))
+            if (kb.qKey.isPressed)
                 headBone.localRotation = Quaternion.Slerp(headBone.localRotation,
                     headRestRot * Quaternion.Euler(0f, -45f, 0f), Time.deltaTime * blendSpeed);
-            else if (Input.GetKey(KeyCode.E))
+            else if (kb.eKey.isPressed)
                 headBone.localRotation = Quaternion.Slerp(headBone.localRotation,
                     headRestRot * Quaternion.Euler(0f,  45f, 0f), Time.deltaTime * blendSpeed);
         }
 
-        // Taste 1-8 — animatii
-        if (Input.GetKeyDown(KeyCode.Alpha1)) StartWaving();
-        if (Input.GetKeyDown(KeyCode.Alpha2)) StartWalking(5);
-        if (Input.GetKeyDown(KeyCode.Alpha3)) StartPushUps(3);
-        if (Input.GetKeyDown(KeyCode.Alpha4)) StartJumping(3);
-        if (Input.GetKeyDown(KeyCode.Alpha5)) StartSwimming(4);
-        if (Input.GetKeyDown(KeyCode.Alpha6)) StartDancing();
-        if (Input.GetKeyDown(KeyCode.Alpha7)) StartRaisingArms();
-        if (Input.GetKeyDown(KeyCode.Alpha8)) StartHeadRotation(45f, 60f);
-        if (Input.GetKeyDown(KeyCode.Space))  StartJumping(1);
+        // Taste 1-8 — animatii (wasPressedThisFrame = KeyDown echivalent)
+        if (kb.digit1Key.wasPressedThisFrame) StartWaving();
+        if (kb.digit2Key.wasPressedThisFrame) StartWalking(5);
+        if (kb.digit3Key.wasPressedThisFrame) StartPushUps(3);
+        if (kb.digit4Key.wasPressedThisFrame) StartJumping(3);
+        if (kb.digit5Key.wasPressedThisFrame) StartSwimming(4);
+        if (kb.digit6Key.wasPressedThisFrame) StartDancing();
+        if (kb.digit7Key.wasPressedThisFrame) StartRaisingArms();
+        if (kb.digit8Key.wasPressedThisFrame) StartHeadRotation(45f, 60f);
+        if (kb.spaceKey.wasPressedThisFrame)  StartJumping(1);
     }
 
     // ════════════════════════════════════════════════════════════════════════
