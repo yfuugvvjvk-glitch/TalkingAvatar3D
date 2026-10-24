@@ -180,6 +180,17 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         GUI.enabled = true;
         GUILayout.EndHorizontal();
 
+        // Blocam inputul tastaturii avatarului cand userul scrie in chat
+        bool chatFocused = GUI.GetNameOfFocusedControl() == "TalkingAvatarPrompt";
+        AvatarVisemeAnimator.InputBlocked = chatFocused;
+
+        // Buton reset pozitie (daca avatarul a zburat)
+        if (avatarAnimator != null)
+        {
+            if (GUILayout.Button("↺ Reset pozitie", BtnStyle()))
+                avatarAnimator.ResetPosition();
+        }
+
         // ── Control direct avatar ──────────────────────────────────────────
         GUILayout.Space(6f);
         GUILayout.Label("Control direct avatar:", SubtitleStyle());

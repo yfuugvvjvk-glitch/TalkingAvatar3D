@@ -182,11 +182,25 @@ public class AvatarVisemeAnimator : MonoBehaviour
         actionStatus = "Dans!"; return true;
     }
 
+    // ── Blocare input cand userul scrie in chat ──────────────────────────────
+    // Setat din TalkingAvatarBootstrap cand inputField e focusat
+    public static bool InputBlocked = false;
+
     public void RotateAvatar(float deg)
     {
         if (avatarRoot == null) return;
         avatarRoot.Rotate(Vector3.up, deg, Space.Self);
         rootRestRot = avatarRoot.localRotation;
+    }
+
+    // Reseteaza pozitia avatarului la poza initiala (daca a zburat)
+    public void ResetPosition()
+    {
+        if (avatarRoot == null) return;
+        avatarRoot.localPosition = rootRestPos;
+        avatarRoot.localRotation = rootRestRot;
+        verticalVelocity = 0f;
+        isGrounded = true;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -340,16 +354,19 @@ public class AvatarVisemeAnimator : MonoBehaviour
         var kb = Keyboard.current;
         if (kb == null) return;
 
-        // ── Rotire stanga/dreapta ────────────────────────────────────────
+        // ── BLOCAT cand userul scrie in campul de chat ────────────────────
+        if (InputBlocked) return;
+
+        // ── Rotire stanga/dreapta (DOAR SAGETI — A/D rezervate pt chat) ──
         float rot = 0f;
-        if (kb.leftArrowKey.isPressed  || kb.aKey.isPressed) rot = -1f;
-        if (kb.rightArrowKey.isPressed || kb.dKey.isPressed) rot =  1f;
+        if (kb.leftArrowKey.isPressed)  rot = -1f;
+        if (kb.rightArrowKey.isPressed) rot =  1f;
         if (rot != 0f) RotateAvatar(rot * 120f * Time.deltaTime);
 
-        // ── Mers inainte/inapoi ──────────────────────────────────────────
+        // ── Mers inainte/inapoi (DOAR SAGETI sus/jos) ────────────────────
         float fwd = 0f;
-        if (kb.upArrowKey.isPressed   || kb.wKey.isPressed) fwd =  1f;
-        if (kb.downArrowKey.isPressed || kb.sKey.isPressed) fwd = -1f;
+        if (kb.upArrowKey.isPressed)   fwd =  1f;
+        if (kb.downArrowKey.isPressed) fwd = -1f;
 
         if (fwd != 0f && !pushUpActive && !swimActive)
         {
@@ -545,8 +562,8 @@ public class AvatarVisemeAnimator : MonoBehaviour
             float cy = (et % REP) / REP;
             // sus: brate intinse (0), jos: brate indoite (80°)
             float bendT = (1f - Mathf.Cos(cy * Mathf.PI * 2f)) * 0.5f; // 0=sus, 1=jos
-            float armAngle   = bendT * 75f;  // UpperArm
-            float foreAngle  = bendT * 90f;  // ForeArm
+            float armAngle   = bendT * 75f;  // UpperArm rotit inainte
+            float elbowAngle = bendT * 95f;  // ForeArm: cotul se indoaie pe Y
             float bodyLift   = Mathf.Lerp(0.28f, 0.04f, bendT); // corp coboara
 
             avatarRoot.localRotation = floorRot;
@@ -554,8 +571,13 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
             BoneX(leftArmBone,   leftArmRestRot,   armAngle);
             BoneX(rightArmBone,  rightArmRestRot,  armAngle);
-            BoneX(leftForeArmBone,  leftForeArmRestRot,  foreAngle);
-            BoneX(rightForeArmBone, rightForeArmRestRot, foreAngle);
+            // Cotul se indoaie — ForeArm pe Y (nu X care roteaza antebrtul)
+            if (leftForeArmBone  != null) leftForeArmBone.localRotation  = Quaternion.Slerp(
+                leftForeArmBone.localRotation,
+                leftForeArmRestRot  * Quaternion.Euler(0f, -elbowAngle, 0f), Time.deltaTime * blendSpeed);
+            if (rightForeArmBone != null) rightForeArmBone.localRotation = Quaternion.Slerp(
+                rightForeArmBone.localRotation,
+                rightForeArmRestRot * Quaternion.Euler(0f,  elbowAngle, 0f), Time.deltaTime * blendSpeed);
 
             int done = Mathf.Min(pushUpReps, (int)(et/REP) + (cy > 0.8f ? 1 : 0));
             actionStatus = $"Flotari: {done}/{pushUpReps}";
