@@ -253,7 +253,8 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (danceActive)   UpdateDance();
 
         // ── Idle: brate naturale (nu T-pose) ─────────────────────────────
-        bool armsBusy = walkActive || waveActive || raiseActive || swimActive || danceActive || moveActive;
+        bool armsBusy = walkActive || waveActive || raiseActive || swimActive
+                     || danceActive || moveActive || jumpActive || pushUpActive;
         if (!armsBusy)
         {
             float breath = Mathf.Sin(Time.time * 0.8f) * 1.2f;
@@ -555,7 +556,6 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private void UpdatePushUps()
     {
-        // Flotari CORECTE: corp orizontal, brate se indoaie/intind
         const float TR = 0.65f, REP = 1.4f;
         float e = Time.time - pushUpStart, dur = pushUpReps * REP;
         Quaternion floorRot = rootRestRot * Quaternion.Euler(90f, 90f, 0f);
@@ -564,53 +564,61 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (e < TR)
         {
             // Tranzitie la pozitia orizontala
-            float t = Mathf.SmoothStep(0f, 1f, e/TR);
+            float t = Mathf.SmoothStep(0f, 1f, e / TR);
             avatarRoot.localRotation = Quaternion.Slerp(rootRestRot, floorRot, t);
             avatarRoot.localPosition = Vector3.Lerp(rootRestPos, floorPos, t);
-            // Brate incep sa se indoaie in timp ce corpul se pune orizontal
-            float armBend = t * 30f;
-            BoneX(leftArmBone,   leftArmRestRot,   armBend);
-            BoneX(rightArmBone,  rightArmRestRot,  armBend);
-            BoneX(leftForeArmBone,  leftForeArmRestRot,  armBend * 2f);
-            BoneX(rightForeArmBone, rightForeArmRestRot, armBend * 2f);
+            // Brațe incep sa se ridice în față
+            float armFwd = t * 85f;
+            if (leftArmBone  != null) leftArmBone.localRotation  = Quaternion.Slerp(leftArmBone.localRotation,
+                leftArmRestRot  * Quaternion.Euler(armFwd, 0f, 0f), Time.deltaTime * blendSpeed * 3f);
+            if (rightArmBone != null) rightArmBone.localRotation = Quaternion.Slerp(rightArmBone.localRotation,
+                rightArmRestRot * Quaternion.Euler(armFwd, 0f, 0f), Time.deltaTime * blendSpeed * 3f);
             return;
         }
+
         if (e < TR + dur)
         {
-            float et = e - TR;
-            float cy = (et % REP) / REP;
-            // sus: brate intinse (0), jos: brate indoite (80°)
+            float et   = e - TR;
+            float cy   = (et % REP) / REP;
             float bendT = (1f - Mathf.Cos(cy * Mathf.PI * 2f)) * 0.5f; // 0=sus, 1=jos
-            float armAngle   = bendT * 75f;  // UpperArm rotit inainte
-            float elbowAngle = bendT * 95f;  // ForeArm: cotul se indoaie pe Y
-            float bodyLift   = Mathf.Lerp(0.28f, 0.04f, bendT); // corp coboara
 
+            // Corp coboara/urca
+            float bodyY = Mathf.Lerp(0.28f, 0.04f, bendT);
             avatarRoot.localRotation = floorRot;
-            avatarRoot.localPosition = floorPos + Vector3.up * (bodyLift - 0.28f);
+            avatarRoot.localPosition = floorPos + Vector3.up * (bodyY - 0.28f);
 
-            BoneX(leftArmBone,   leftArmRestRot,   armAngle);
-            BoneX(rightArmBone,  rightArmRestRot,  armAngle);
-            // Cotul se indoaie — ForeArm pe Y (nu X care roteaza antebrtul)
-            if (leftForeArmBone  != null) leftForeArmBone.localRotation  = Quaternion.Slerp(
-                leftForeArmBone.localRotation,
-                leftForeArmRestRot  * Quaternion.Euler(0f, -elbowAngle, 0f), Time.deltaTime * blendSpeed);
-            if (rightForeArmBone != null) rightForeArmBone.localRotation = Quaternion.Slerp(
-                rightForeArmBone.localRotation,
-                rightForeArmRestRot * Quaternion.Euler(0f,  elbowAngle, 0f), Time.deltaTime * blendSpeed);
+            // Brate: UpperArm se duce inainte, ForeArm se indoaie la cot
+            float armAngle  = 85f + bendT * 20f;  // UpperArm inainte (85-105°)
+            float cotAngle  = bendT * 90f;          // ForeArm cot se indoaie
 
-            int done = Mathf.Min(pushUpReps, (int)(et/REP) + (cy > 0.8f ? 1 : 0));
+            // Setam direct (nu Slerp) pentru vizibilitate maxima
+            if (leftArmBone  != null) leftArmBone.localRotation  =
+                leftArmRestRot  * Quaternion.Euler(armAngle, 0f, 0f);
+            if (rightArmBone != null) rightArmBone.localRotation =
+                rightArmRestRot * Quaternion.Euler(armAngle, 0f, 0f);
+            if (leftForeArmBone  != null) leftForeArmBone.localRotation  =
+                leftForeArmRestRot  * Quaternion.Euler(0f, -cotAngle, 0f);
+            if (rightForeArmBone != null) rightForeArmBone.localRotation =
+                rightForeArmRestRot * Quaternion.Euler(0f,  cotAngle, 0f);
+
+            int done = Mathf.Min(pushUpReps, (int)(et / REP) + (cy > 0.8f ? 1 : 0));
             actionStatus = $"Flotari: {done}/{pushUpReps}";
             return;
         }
+
         // Revenire
         float ret = Mathf.Clamp01((e - TR - dur) / TR);
-        avatarRoot.localRotation = Quaternion.Slerp(floorRot, rootRestRot, Mathf.SmoothStep(0f,1f,ret));
-        avatarRoot.localPosition = Vector3.Lerp(floorPos, rootRestPos, ret);
-        float rb = (1f - ret) * 30f;
-        BoneX(leftArmBone,   leftArmRestRot,   rb);
-        BoneX(rightArmBone,  rightArmRestRot,  rb);
-        BoneX(leftForeArmBone,  leftForeArmRestRot,  rb * 2f);
-        BoneX(rightForeArmBone, rightForeArmRestRot, rb * 2f);
+        float sm  = Mathf.SmoothStep(0f, 1f, ret);
+        avatarRoot.localRotation = Quaternion.Slerp(floorRot, rootRestRot, sm);
+        avatarRoot.localPosition = Vector3.Lerp(floorPos, rootRestPos, sm);
+        if (leftArmBone  != null) leftArmBone.localRotation  = Quaternion.Slerp(
+            leftArmBone.localRotation,  leftArmRestRot,  Time.deltaTime * blendSpeed * 2f);
+        if (rightArmBone != null) rightArmBone.localRotation = Quaternion.Slerp(
+            rightArmBone.localRotation, rightArmRestRot, Time.deltaTime * blendSpeed * 2f);
+        if (leftForeArmBone  != null) leftForeArmBone.localRotation  = Quaternion.Slerp(
+            leftForeArmBone.localRotation,  leftForeArmRestRot,  Time.deltaTime * blendSpeed * 2f);
+        if (rightForeArmBone != null) rightForeArmBone.localRotation = Quaternion.Slerp(
+            rightForeArmBone.localRotation, rightForeArmRestRot, Time.deltaTime * blendSpeed * 2f);
         if (ret >= 1f) { pushUpActive = false; actionStatus = $"Gata: {pushUpReps} flotari."; Restore(); }
     }
 
@@ -695,36 +703,55 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private void UpdateJump()
     {
-        // Saritura procedurala cu animatie brate+picioare
         const float SPJ = 0.55f, RET = 0.3f;
         float e = Time.time - jumpStart, dur = jumpReps * SPJ;
         if (e < dur)
         {
             float cy  = (e % SPJ) / SPJ;
-            float lft = Mathf.Sin(cy * Mathf.PI);
+            float lft = Mathf.Sin(cy * Mathf.PI); // 0→1→0 per ciclu
+
             // Corp se ridica
-            if (avatarRoot != null) avatarRoot.localPosition = Vector3.Lerp(avatarRoot.localPosition,
-                rootRestPos + Vector3.up * lft * 0.3f, Time.deltaTime * blendSpeed * 4f);
+            if (avatarRoot != null)
+            {
+                Vector3 p = avatarRoot.localPosition;
+                p.y = Mathf.Lerp(rootRestPos.y, rootRestPos.y + 0.3f * lft, 0.3f);
+                avatarRoot.localPosition = p;
+            }
+
             // Genunchi indoiti la decolare si aterizare
-            float kn = (1f - lft) * 20f;
-            BoneX(leftLegBone,  leftLegRestRot,  -kn);
-            BoneX(rightLegBone, rightLegRestRot, -kn);
-            // Brate ridicate in aer
-            float armLift = lft * 45f;
-            BoneZ(leftArmBone,  leftArmRestRot,   armLift);
-            BoneZ(rightArmBone, rightArmRestRot, -armLift);
-            // Antebrate se intind
-            SmoothBone(leftForeArmBone,  leftForeArmRestRot  * Quaternion.Euler(-lft*15f, 0f, 0f), blendSpeed);
-            SmoothBone(rightForeArmBone, rightForeArmRestRot * Quaternion.Euler(-lft*15f, 0f, 0f), blendSpeed);
-            actionStatus = $"Saritura {Mathf.Min(jumpReps,(int)(e/SPJ)+1)}/{jumpReps}"; return;
+            float kn = (1f - lft) * 22f;
+            if (leftLegBone  != null) leftLegBone.localRotation  =
+                leftLegRestRot  * Quaternion.Euler(-kn, 0f, 0f);
+            if (rightLegBone != null) rightLegBone.localRotation =
+                rightLegRestRot * Quaternion.Euler(-kn, 0f, 0f);
+
+            // Brate ridicate in aer — direct, vizibil
+            float armZ = lft * 50f;
+            if (leftArmBone  != null) leftArmBone.localRotation  =
+                leftArmRestRot  * Quaternion.Euler(0f, 0f,  armZ);
+            if (rightArmBone != null) rightArmBone.localRotation =
+                rightArmRestRot * Quaternion.Euler(0f, 0f, -armZ);
+
+            actionStatus = $"Saritura {Mathf.Min(jumpReps, (int)(e/SPJ)+1)}/{jumpReps}";
+            return;
         }
-        float r = Mathf.Clamp01((e-dur)/RET);
-        if (avatarRoot != null) avatarRoot.localPosition = Vector3.Lerp(
-            avatarRoot.localPosition, rootRestPos, Time.deltaTime*blendSpeed);
-        BoneX(leftLegBone,  leftLegRestRot,  0f, r);
-        BoneX(rightLegBone, rightLegRestRot, 0f, r);
-        BoneZ(leftArmBone,  leftArmRestRot,  0f, r);
-        BoneZ(rightArmBone, rightArmRestRot, 0f, r);
+
+        float r = Mathf.Clamp01((e - dur) / RET);
+        // Revenire smooth
+        if (avatarRoot != null)
+        {
+            Vector3 p = avatarRoot.localPosition;
+            p.y = Mathf.Lerp(p.y, rootRestPos.y, Time.deltaTime * blendSpeed * 2f);
+            avatarRoot.localPosition = p;
+        }
+        if (leftLegBone  != null) leftLegBone.localRotation  = Quaternion.Slerp(
+            leftLegBone.localRotation,  leftLegRestRot,  Time.deltaTime * blendSpeed);
+        if (rightLegBone != null) rightLegBone.localRotation = Quaternion.Slerp(
+            rightLegBone.localRotation, rightLegRestRot, Time.deltaTime * blendSpeed);
+        if (leftArmBone  != null) leftArmBone.localRotation  = Quaternion.Slerp(
+            leftArmBone.localRotation,  leftArmRestRot,  Time.deltaTime * blendSpeed);
+        if (rightArmBone != null) rightArmBone.localRotation = Quaternion.Slerp(
+            rightArmBone.localRotation, rightArmRestRot, Time.deltaTime * blendSpeed);
         if (r >= 1f) { jumpActive = false; actionStatus = $"Gata: {jumpReps} sarituri."; Restore(); }
     }
 
