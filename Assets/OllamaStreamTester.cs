@@ -12,7 +12,7 @@ public class OllamaStreamTester : MonoBehaviour
     private const string ProjectIntroduction =
         "Bună! Mă numesc Petrescu Cristian, sunt student în anul al treilea la Informatică, iar acesta este proiectul meu. " +
         "Avatarul poate să meargă, să facă flotări, să salute, să ridice brațele, să sară, să înoate, să danseze și să rotească capul. " +
-        "Poți să-mi pui și întrebări, iar eu îți voi răspunde.";
+        "Pot să execut aceste mișcări și să răspund la întrebări simple.";
 
     [Header("Setări Ollama")]
     public string modelName = "qwen2.5:3b";
@@ -39,6 +39,7 @@ public class OllamaStreamTester : MonoBehaviour
     private bool   chatInitialized;
     private bool   standaloneSpeechActive;
     private bool   commandInProgress;
+    private Func<bool> pendingCommandAction;
 
     private Coroutine ttsCoroutine;
 
@@ -61,11 +62,14 @@ public class OllamaStreamTester : MonoBehaviour
         QueueStandaloneSpeech(ProjectIntroduction);
     }
 
-    public void ReportAvatarCommand(string command, string actionDescription, bool executed)
+    public void ReportAvatarCommand(string command, string actionDescription, Func<bool> startAction)
     {
         if (IsStreaming) return;
         commandInProgress = true;
         AvatarVisemeAnimator.InputBlocked = true;
+        bool speakWithAction = CanSpeak;
+        bool executed = speakWithAction ? startAction != null : startAction != null && startAction();
+        if (speakWithAction) pendingCommandAction = startAction;
         string response = GetCommandResponse(executed, actionDescription);
         lock (streamLock)
         {
@@ -93,7 +97,8 @@ public class OllamaStreamTester : MonoBehaviour
     {
         if (IsStreaming || string.IsNullOrWhiteSpace(prompt)) return;
 
-        bool actionExecuted = TryStartAvatarAction(prompt, out bool commandRecognized, out string actionDescription);
+        bool commandRecognized = TryStartAvatarAction(prompt, out string actionDescription,
+            out Func<bool> startAction);
 
         lock (streamLock)
         {
@@ -136,6 +141,11 @@ public class OllamaStreamTester : MonoBehaviour
             {
                 commandInProgress = true;
                 AvatarVisemeAnimator.InputBlocked = true;
+                bool speakWithAction = CanSpeak;
+                bool actionExecuted = speakWithAction
+                    ? startAction != null
+                    : startAction != null && startAction();
+                if (speakWithAction) pendingCommandAction = startAction;
                 string response = GetCommandResponse(actionExecuted, actionDescription);
                 lock (streamLock)
                 {
@@ -341,6 +351,7 @@ public class OllamaStreamTester : MonoBehaviour
                 string msg = errObj?.error ?? webReq.error;
                 SpeechStatus = $"TTS eroare ({webReq.responseCode}): {msg}";
                 Debug.LogError(SpeechStatus);
+                StartPendingCommandAction();
                 yield break;
             }
 
@@ -349,6 +360,7 @@ public class OllamaStreamTester : MonoBehaviour
             {
                 SpeechStatus = "TTS: WAV invalid.";
                 Debug.LogError(SpeechStatus);
+                StartPendingCommandAction();
                 yield break;
             }
 
@@ -370,6 +382,7 @@ public class OllamaStreamTester : MonoBehaviour
             if (avatarAnimator != null)
                 avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
 
+            StartPendingCommandAction();
             audioSource.clip = clip;
             audioSource.Play();
 
@@ -382,10 +395,19 @@ public class OllamaStreamTester : MonoBehaviour
     // Detecție comenzi de animație
     // ════════════════════════════════════════════════════════════════════════
 
-    private bool TryStartAvatarAction(string prompt, out bool commandRecognized, out string actionDescription)
+    private void StartPendingCommandAction()
     {
-        commandRecognized = false;
+        Func<bool> startAction = pendingCommandAction;
+        pendingCommandAction = null;
+        if (startAction != null && !startAction())
+            Debug.LogWarning("Comanda avatarului nu a putut porni la sincronizarea cu vocea.");
+    }
+
+    private bool TryStartAvatarAction(string prompt, out string actionDescription,
+        out Func<bool> startAction)
+    {
         actionDescription = string.Empty;
+        startAction = null;
         string norm = prompt.ToLowerInvariant()
             .Replace("ă","a").Replace("â","a").Replace("î","i")
             .Replace("ș","s").Replace("ş","s").Replace("ț","t").Replace("ţ","t");
@@ -393,26 +415,26 @@ public class OllamaStreamTester : MonoBehaviour
         // ── Ridică brațele / mâinile sus (prioritate față de wave simplu) ──
         if (Regex.IsMatch(norm, @"\b(ridica\s+mainile|ridica\s+mainile\s+sus|ridica\s+bratele|raise\s+(arms?|hands?))\b"))
         {
-            commandRecognized = true;
             actionDescription = "ridic brațele";
-            return avatarAnimator != null && avatarAnimator.StartRaisingArms();
+            startAction = () => avatarAnimator != null && avatarAnimator.StartRaisingArms();
+            return true;
         }
 
         // ── Wave / salut ───────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(salut[a]?|wave|misca\s+brat|ridica\s+brat|agit[a]?\s+brat)\b"))
         {
-            commandRecognized = true;
             actionDescription = "salut";
-            return avatarAnimator != null && avatarAnimator.StartWaving();
+            startAction = () => avatarAnimator != null && avatarAnimator.StartWaving();
+            return true;
         }
 
         // ── Înot ───────────────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(inoata|inot|swimming|swim)\b"))
         {
             int sec = ParseActionCount(norm, norm, 5);
-            commandRecognized = true;
             actionDescription = "înot";
-            return avatarAnimator != null && avatarAnimator.StartSwimming(sec);
+            startAction = () => avatarAnimator != null && avatarAnimator.StartSwimming(sec);
+            return true;
         }
 
         // ── Săritură ───────────────────────────────────────────────────────
@@ -421,25 +443,25 @@ public class OllamaStreamTester : MonoBehaviour
             if (Regex.IsMatch(norm, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
                 return false;
             int reps = ParseActionCount(norm, norm, 3);
-            commandRecognized = true;
             actionDescription = "sar";
-            return avatarAnimator != null && avatarAnimator.StartJumping(reps);
+            startAction = () => avatarAnimator != null && avatarAnimator.StartJumping(reps);
+            return true;
         }
 
         // ── Dans ───────────────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(danseaza|dans|dance)\b"))
         {
-            commandRecognized = true;
             actionDescription = "dansez";
-            return avatarAnimator != null && avatarAnimator.StartDancing();
+            startAction = () => avatarAnimator != null && avatarAnimator.StartDancing();
+            return true;
         }
 
         // ── Rotește capul ──────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(roteste\s+cap(ul)?|turn\s+head)\b"))
         {
-            commandRecognized = true;
             actionDescription = "rotesc capul";
-            return avatarAnimator != null && avatarAnimator.StartHeadRotation(45f, 60f);
+            startAction = () => avatarAnimator != null && avatarAnimator.StartHeadRotation(45f, 60f);
+            return true;
         }
 
         // ── Flotări ────────────────────────────────────────────────────────
@@ -451,9 +473,9 @@ public class OllamaStreamTester : MonoBehaviour
             string before = norm.Substring(0, mPush.Index);
             string after  = norm.Substring(mPush.Index + mPush.Length);
             int reps = ParseActionCount(before, after, 5);
-            commandRecognized = true;
             actionDescription = reps == 1 ? "fac o flotare" : $"fac {reps} flotări";
-            return avatarAnimator != null && avatarAnimator.StartPushUps(reps);
+            startAction = () => avatarAnimator != null && avatarAnimator.StartPushUps(reps);
+            return true;
         }
 
         // ── Mers ───────────────────────────────────────────────────────────
@@ -464,9 +486,9 @@ public class OllamaStreamTester : MonoBehaviour
         if (Regex.IsMatch(beforeWalk, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return false;
 
         int steps = ParseActionCount(beforeWalk, norm.Substring(mWalk.Index + mWalk.Length), 5);
-        commandRecognized = true;
         actionDescription = steps == 1 ? "fac un pas" : $"fac {steps} pași";
-        return avatarAnimator != null && avatarAnimator.StartWalking(steps);
+        startAction = () => avatarAnimator != null && avatarAnimator.StartWalking(steps);
+        return true;
     }
 
     private static int ParseActionCount(string before, string after, int defaultVal)

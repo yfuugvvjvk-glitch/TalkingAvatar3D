@@ -263,8 +263,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
     private void RunAvatarCommand(string command, string actionDescription, Func<bool> execute)
     {
         if (chat == null || chat.IsStreaming) return;
-        bool executed = execute();
-        chat.ReportAvatarCommand(command, actionDescription, executed);
+        chat.ReportAvatarCommand(command, actionDescription, execute);
     }
 
     // ── Stiluri GUI ─────────────────────────────────────────────────────────
