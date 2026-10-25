@@ -9,6 +9,11 @@ using System.Text.RegularExpressions;
 
 public class OllamaStreamTester : MonoBehaviour
 {
+    private const string ProjectIntroduction =
+        "Bună! Mă numesc Petrescu Cristian, sunt student în anul al treilea la Informatică, iar acesta este proiectul meu. " +
+        "Avatarul poate să meargă, să facă flotări, să salute, să ridice brațele, să sară, să înoate, să danseze și să rotească capul. " +
+        "Poți să-mi pui și întrebări, iar eu îți voi răspunde.";
+
     [Header("Setări Ollama")]
     public string modelName = "qwen2.5:3b";
 
@@ -32,15 +37,44 @@ public class OllamaStreamTester : MonoBehaviour
     private string currentStreamedText = "";
     private bool   isStreaming;
     private bool   chatInitialized;
+    private bool   standaloneSpeechActive;
+    private bool   commandInProgress;
 
     private Coroutine ttsCoroutine;
 
     public string SpeechStatus     { get; private set; } = "TTS: în așteptare";
     public string AvatarActionStatus => avatarAnimator != null ? avatarAnimator.ActionStatus : string.Empty;
-    public bool   IsStreaming        => isStreaming;
+    public bool   IsCommandInProgress => commandInProgress;
+    public bool   IsStreaming        => isStreaming || commandInProgress || ttsCoroutine != null;
     public string CurrentChatText
     {
         get { lock (streamLock) return currentStreamedText; }
+    }
+
+    public void PresentProject()
+    {
+        lock (streamLock)
+        {
+            currentStreamedText += $"\nAI: {ProjectIntroduction}\n";
+            if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+        }
+        QueueStandaloneSpeech(ProjectIntroduction);
+    }
+
+    public void ReportAvatarCommand(string command, string actionDescription, bool executed)
+    {
+        if (IsStreaming) return;
+        commandInProgress = true;
+        AvatarVisemeAnimator.InputBlocked = true;
+        string response = GetCommandResponse(executed, actionDescription);
+        lock (streamLock)
+        {
+            currentStreamedText += $"\nTu: {command}\nAI: {response}\n";
+            if (CanSpeak) speechQueue.Enqueue(response);
+            if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+        }
+        StartStandaloneTtsWorker();
+        StartCoroutine(WaitForCommandCompletion());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -57,9 +91,9 @@ public class OllamaStreamTester : MonoBehaviour
 
     public async void SendPrompt(string prompt)
     {
-        if (isStreaming || string.IsNullOrWhiteSpace(prompt)) return;
+        if (IsStreaming || string.IsNullOrWhiteSpace(prompt)) return;
 
-        TryStartAvatarAction(prompt);
+        bool actionExecuted = TryStartAvatarAction(prompt, out bool commandRecognized, out string actionDescription);
 
         lock (streamLock)
         {
@@ -75,6 +109,7 @@ public class OllamaStreamTester : MonoBehaviour
         }
 
         isStreaming = true;
+        AvatarVisemeAnimator.InputBlocked = true;
 
         if (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint))
         {
@@ -97,6 +132,21 @@ public class OllamaStreamTester : MonoBehaviour
 
         try
         {
+            if (commandRecognized)
+            {
+                commandInProgress = true;
+                AvatarVisemeAnimator.InputBlocked = true;
+                string response = GetCommandResponse(actionExecuted, actionDescription);
+                lock (streamLock)
+                {
+                    currentStreamedText += response;
+                    if (CanSpeak) speechQueue.Enqueue(response);
+                    if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+                }
+                StartCoroutine(WaitForCommandCompletion());
+                return;
+            }
+
             if (!chatInitialized)
             {
                 ollama.Ollama.InitChat(8, BuildSystemPrompt());
@@ -127,6 +177,50 @@ public class OllamaStreamTester : MonoBehaviour
             }
             isStreaming = false;
         }
+    }
+
+    private static string GetCommandResponse(bool executed, string actionDescription)
+    {
+        if (!executed) return "Nu pot executa această acțiune acum.";
+        return $"Acum {actionDescription}.";
+    }
+
+    private IEnumerator WaitForCommandCompletion()
+    {
+        while (avatarAnimator != null && avatarAnimator.IsPerformingAction)
+            yield return null;
+
+        while ((ttsCoroutine != null || audioSource != null && audioSource.isPlaying) &&
+               (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint)))
+            yield return null;
+
+        commandInProgress = false;
+    }
+
+    private bool CanSpeak => speakResponses && audioSource != null &&
+                             !string.IsNullOrWhiteSpace(ttsEndpoint);
+
+    private void QueueStandaloneSpeech(string phrase)
+    {
+        if (!speakResponses || audioSource == null || string.IsNullOrWhiteSpace(ttsEndpoint))
+            return;
+
+        lock (streamLock) speechQueue.Enqueue(phrase);
+        StartStandaloneTtsWorker();
+    }
+
+    private void StartStandaloneTtsWorker()
+    {
+        if (!speakResponses || audioSource == null || string.IsNullOrWhiteSpace(ttsEndpoint) ||
+            ttsCoroutine != null)
+            return;
+
+        if (!isStreaming)
+        {
+            isStreaming = true;
+            standaloneSpeechActive = true;
+        }
+        ttsCoroutine = StartCoroutine(TtsWorker());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -196,6 +290,13 @@ public class OllamaStreamTester : MonoBehaviour
 
             if (phrase == null)
             {
+                if (standaloneSpeechActive)
+                {
+                    standaloneSpeechActive = false;
+                    isStreaming = false;
+                    ttsCoroutine = null;
+                    yield break;
+                }
                 if (!isStreaming)
                 {
                     ttsCoroutine = null;
@@ -281,8 +382,10 @@ public class OllamaStreamTester : MonoBehaviour
     // Detecție comenzi de animație
     // ════════════════════════════════════════════════════════════════════════
 
-    private void TryStartAvatarAction(string prompt)
+    private bool TryStartAvatarAction(string prompt, out bool commandRecognized, out string actionDescription)
     {
+        commandRecognized = false;
+        actionDescription = string.Empty;
         string norm = prompt.ToLowerInvariant()
             .Replace("ă","a").Replace("â","a").Replace("î","i")
             .Replace("ș","s").Replace("ş","s").Replace("ț","t").Replace("ţ","t");
@@ -290,47 +393,53 @@ public class OllamaStreamTester : MonoBehaviour
         // ── Ridică brațele / mâinile sus (prioritate față de wave simplu) ──
         if (Regex.IsMatch(norm, @"\b(ridica\s+mainile|ridica\s+mainile\s+sus|ridica\s+bratele|raise\s+(arms?|hands?))\b"))
         {
-            avatarAnimator?.StartRaisingArms();
-            return;
+            commandRecognized = true;
+            actionDescription = "ridic brațele";
+            return avatarAnimator != null && avatarAnimator.StartRaisingArms();
         }
 
         // ── Wave / salut ───────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(salut[a]?|wave|misca\s+brat|ridica\s+brat|agit[a]?\s+brat)\b"))
         {
-            avatarAnimator?.StartWaving();
-            return;
+            commandRecognized = true;
+            actionDescription = "salut";
+            return avatarAnimator != null && avatarAnimator.StartWaving();
         }
 
         // ── Înot ───────────────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(inoata|inot|swimming|swim)\b"))
         {
             int sec = ParseActionCount(norm, norm, 5);
-            avatarAnimator?.StartSwimming(sec);
-            return;
+            commandRecognized = true;
+            actionDescription = "înot";
+            return avatarAnimator != null && avatarAnimator.StartSwimming(sec);
         }
 
         // ── Săritură ───────────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(sari|saritura|jump|sara)\b"))
         {
             if (Regex.IsMatch(norm, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
-                return;
+                return false;
             int reps = ParseActionCount(norm, norm, 3);
-            avatarAnimator?.StartJumping(reps);
-            return;
+            commandRecognized = true;
+            actionDescription = "sar";
+            return avatarAnimator != null && avatarAnimator.StartJumping(reps);
         }
 
         // ── Dans ───────────────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(danseaza|dans|dance)\b"))
         {
-            avatarAnimator?.StartDancing();
-            return;
+            commandRecognized = true;
+            actionDescription = "dansez";
+            return avatarAnimator != null && avatarAnimator.StartDancing();
         }
 
         // ── Rotește capul ──────────────────────────────────────────────────
         if (Regex.IsMatch(norm, @"\b(roteste\s+cap(ul)?|turn\s+head)\b"))
         {
-            avatarAnimator?.StartHeadRotation(45f, 60f);
-            return;
+            commandRecognized = true;
+            actionDescription = "rotesc capul";
+            return avatarAnimator != null && avatarAnimator.StartHeadRotation(45f, 60f);
         }
 
         // ── Flotări ────────────────────────────────────────────────────────
@@ -338,23 +447,26 @@ public class OllamaStreamTester : MonoBehaviour
         if (mPush.Success)
         {
             if (Regex.IsMatch(norm.Substring(0, mPush.Index), @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$"))
-                return;
+                return false;
             string before = norm.Substring(0, mPush.Index);
             string after  = norm.Substring(mPush.Index + mPush.Length);
             int reps = ParseActionCount(before, after, 5);
-            avatarAnimator?.StartPushUps(reps);
-            return;
+            commandRecognized = true;
+            actionDescription = reps == 1 ? "fac o flotare" : $"fac {reps} flotări";
+            return avatarAnimator != null && avatarAnimator.StartPushUps(reps);
         }
 
         // ── Mers ───────────────────────────────────────────────────────────
         Match mWalk = Regex.Match(norm, @"\b(pasi?|mers|mergi|mergeti|walk(?:ing)?|steps?)\b");
-        if (!mWalk.Success) return;
+        if (!mWalk.Success) return false;
 
         string beforeWalk = norm.Substring(0, mWalk.Index);
-        if (Regex.IsMatch(beforeWalk, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return;
+        if (Regex.IsMatch(beforeWalk, @"\b(nu|don't|dont|stop|fara|without)\b[^.!?]{0,24}$")) return false;
 
         int steps = ParseActionCount(beforeWalk, norm.Substring(mWalk.Index + mWalk.Length), 5);
-        avatarAnimator?.StartWalking(steps);
+        commandRecognized = true;
+        actionDescription = steps == 1 ? "fac un pas" : $"fac {steps} pași";
+        return avatarAnimator != null && avatarAnimator.StartWalking(steps);
     }
 
     private static int ParseActionCount(string before, string after, int defaultVal)
@@ -382,20 +494,22 @@ public class OllamaStreamTester : MonoBehaviour
     private string BuildSystemPrompt()
     {
         bool ro = speechLanguage.StartsWith("ro", StringComparison.OrdinalIgnoreCase) ||
-                  speechLanguage.StartsWith("román", StringComparison.OrdinalIgnoreCase);
+                  speechLanguage.StartsWith("román", StringComparison.OrdinalIgnoreCase) ||
+                  speechLanguage.StartsWith("romanian", StringComparison.OrdinalIgnoreCase);
         if (ro)
-            return "Ești un asistent conversațional inteligent pentru un avatar 3D. " +
-                   "Răspunde în română cu diacritice corecte. Poți răspunde la orice întrebare — " +
-                   "geografie (unde e ecuatorul, capitale, munți), știință, istorie, povești inventate, " +
-                   "glume, explicații complexe. Răspunde în 2-4 propoziții, natural și informativ. " +
-                   "Nu refuza nicio comandă de animație — ele sunt executate automat de cod. " +
-                   "Dacă ți se cere o poveste, inventează una creativă. " +
-                   "Dacă ți se cere să explici ceva, explică clar și interesant.";
-        return "You are an intelligent conversational assistant for a 3D avatar. " +
-               "Answer any question — geography (where is the equator, capitals, oceans), science, history, " +
-               "invented stories, jokes, complex explanations. Reply in 2-4 sentences, naturally and informatively. " +
-               "Never refuse animation commands — they are executed automatically by code. " +
-               "If asked for a story, invent a creative one. If asked to explain something, explain clearly.";
+            return "Ești asistentul vocal al unui avatar 3D care îl ajută pe studentul Petrescu Cristian să-și prezinte proiectul. " +
+                   "Răspunde în română, cu diacritice, în 1-3 propoziții scurte și simple. " +
+                   "Poți răspunde la întrebări generale și de nivel introductiv despre proiect, informatică, " +
+                   "geografie, știință și cultură generală. Nu pretinde că poți explica detalii avansate sau " +
+                   "că știi informații care nu au fost furnizate. Dacă întrebarea este prea complicată, neclară " +
+                   "sau nu cunoști răspunsul, spune sincer acest lucru și invită utilizatorul să întrebe ceva mai simplu. " +
+                   "Nu inventa fapte. Comenzile avatarului sunt executate separat de aplicație.";
+        return "You are the voice assistant for a 3D avatar helping student Petrescu Cristian present his project. " +
+               "Reply in English using 1-3 short, simple sentences. Answer general and introductory questions about " +
+               "the project, computer science, geography, science, and general knowledge. Do not claim advanced expertise " +
+               "or knowledge of details that were not provided. If a question is too complex, unclear, or you do not know " +
+               "the answer, say so honestly and invite the user to ask something simpler. Do not invent facts. " +
+               "Avatar commands are executed separately by the application.";
     }
 
     // ════════════════════════════════════════════════════════════════════════

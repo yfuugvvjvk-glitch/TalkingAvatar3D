@@ -84,6 +84,8 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private string actionStatus = string.Empty;
     public  string ActionStatus => actionStatus;
+    public bool IsPerformingAction => walkActive || pushUpActive || waveActive || raiseActive ||
+        swimActive || jumpActive || headRotActive || danceActive || moveActive;
 
     // ════════════════════════════════════════════════════════════════════════
     // Lifecycle
@@ -101,7 +103,12 @@ public class AvatarVisemeAnimator : MonoBehaviour
         rootRestPos = root != null ? root.localPosition : Vector3.zero;
         rootRestRot = root != null ? root.localRotation : Quaternion.identity;
         groundY     = rootRestPos.y;
-        if (root != null) CacheAllBones(root);
+        if (root != null)
+        {
+            CacheAllBones(root);
+            SetNaturalArmPose(leftArmBone, leftForeArmBone, ref leftArmRestRot);
+            SetNaturalArmPose(rightArmBone, rightForeArmBone, ref rightArmRestRot);
+        }
     }
 
     public void RefreshBlendShapes()
@@ -142,21 +149,21 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     public bool StartWaving()
     {
-        if (rightArmBone == null) return false;
+        if (avatarRoot == null || rightArmBone == null) return false;
         StopAll(); waveStart = Time.time; waveActive = true;
         actionStatus = "Salut!"; return true;
     }
 
     public bool StartRaisingArms()
     {
-        if (leftArmBone == null || rightArmBone == null) return false;
+        if (avatarRoot == null || leftArmBone == null || rightArmBone == null) return false;
         StopAll(); raiseStart = Time.time; raiseActive = true;
         actionStatus = "Ridica brate!"; return true;
     }
 
     public bool StartSwimming(int seconds)
     {
-        if (leftArmBone == null) return false;
+        if (avatarRoot == null || leftArmBone == null) return false;
         StopAll(); swimDur = Mathf.Clamp(seconds,1,30); swimStart = Time.time; swimActive = true;
         actionStatus = $"Inot {seconds}s..."; return true;
     }
@@ -387,10 +394,10 @@ public class AvatarVisemeAnimator : MonoBehaviour
             // Animatie picioare + brate
             walkPhase += Time.deltaTime * Mathf.PI * 2f / 0.76f;
             float sw = Mathf.Sin(walkPhase);
-            BoneX(leftLegBone,   leftLegRestRot,   sw * 28f);
-            BoneX(rightLegBone,  rightLegRestRot, -sw * 28f);
-            BoneX(leftArmBone,   leftArmRestRot,  -sw * 20f);
-            BoneX(rightArmBone,  rightArmRestRot,  sw * 20f);
+            RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, sw * 28f, blendSpeed);
+            RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, -sw * 28f, blendSpeed);
+            RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, -sw * 20f, blendSpeed);
+            RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, sw * 20f, blendSpeed);
             // Bob vertical mic sincronizat cu pasul
             float bobY = rootRestPos.y + Mathf.Abs(sw) * 0.014f;
             Vector3 p = avatarRoot.localPosition;
@@ -404,10 +411,10 @@ public class AvatarVisemeAnimator : MonoBehaviour
             if (moveActive)
             {
                 // Revenire picioare/brate la poza normala
-                BoneX(leftLegBone,  leftLegRestRot,  0f, 0.08f);
-                BoneX(rightLegBone, rightLegRestRot, 0f, 0.08f);
-                BoneX(leftArmBone,  leftArmRestRot,  0f, 0.08f);
-                BoneX(rightArmBone, rightArmRestRot, 0f, 0.08f);
+                RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, 0f, 8f);
+                RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, 0f, 8f);
+                RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, 0f, 8f);
+                RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, 0f, 8f);
                 // Revenim la Y-ul de rest
                 Vector3 p = avatarRoot.localPosition;
                 p.y = Mathf.Lerp(p.y, rootRestPos.y, Time.deltaTime * 8f);
@@ -450,10 +457,12 @@ public class AvatarVisemeAnimator : MonoBehaviour
     {
         verticalVelocity = 4.5f;
         isGrounded = false;
-        if (leftArmBone  != null) leftArmBone.localRotation  = leftArmRestRot  * Quaternion.Euler(0f, 0f, 50f);
-        if (rightArmBone != null) rightArmBone.localRotation = rightArmRestRot * Quaternion.Euler(0f, 0f, -50f);
-        if (leftLegBone  != null) leftLegBone.localRotation  = leftLegRestRot  * Quaternion.Euler(-25f, 0f, 0f);
-        if (rightLegBone != null) rightLegBone.localRotation = rightLegRestRot * Quaternion.Euler(-25f, 0f, 0f);
+        Vector3 leftJumpDirection = (avatarRoot.up + avatarRoot.right * 0.7f).normalized;
+        Vector3 rightJumpDirection = (avatarRoot.up - avatarRoot.right * 0.7f).normalized;
+        AimBoneToward(leftArmBone, leftForeArmBone, leftArmRestRot, leftJumpDirection, 0.65f);
+        AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, rightJumpDirection, 0.65f);
+        RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, -25f, blendSpeed);
+        RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, -25f, blendSpeed);
         actionStatus = "Salt!";
     }
 
@@ -534,23 +543,20 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (e < dur)
         {
             float sw = Mathf.Sin(e * Mathf.PI / SPP);
-            BoneX(leftLegBone,   leftLegRestRot,   sw * 28f);
-            BoneX(rightLegBone,  rightLegRestRot, -sw * 28f);
-            BoneX(leftArmBone,   leftArmRestRot,  -sw * 22f);
-            BoneX(rightArmBone,  rightArmRestRot,  sw * 22f);
-            // Antebrate usor indoite natural la mers
-            BoneX(leftForeArmBone,  leftForeArmRestRot,  sw * 10f);
-            BoneX(rightForeArmBone, rightForeArmRestRot, -sw * 10f);
+            RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, sw * 28f, blendSpeed);
+            RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, -sw * 28f, blendSpeed);
+            RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, -sw * 20f, blendSpeed);
+            RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, sw * 20f, blendSpeed);
             if (avatarRoot != null)
                 avatarRoot.localPosition = rootRestPos + Vector3.up * Mathf.Abs(sw) * 0.016f;
             actionStatus = $"Pasi: {Mathf.Min(walkSteps, Mathf.FloorToInt(e/SPP))}/{walkSteps}";
             return;
         }
         float r = Mathf.Clamp01((e-dur)/RET);
-        BoneX(leftLegBone,   leftLegRestRot,  0f, r);
-        BoneX(rightLegBone,  rightLegRestRot, 0f, r);
-        BoneX(leftArmBone,   leftArmRestRot,  0f, r);
-        BoneX(rightArmBone,  rightArmRestRot, 0f, r);
+        RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, 0f, blendSpeed);
         if (r >= 1f) { walkActive = false; actionStatus = $"Gata: {walkSteps} pasi."; Restore(); }
     }
 
@@ -629,17 +635,18 @@ public class AvatarVisemeAnimator : MonoBehaviour
         float e = Time.time - waveStart;
         if (e < DUR)
         {
-            float lift = Mathf.SmoothStep(0f,1f,Mathf.Clamp01(e/0.35f)) * 70f;
-            float wag  = Mathf.Sin(e * 9f) * 18f;
-            BoneZ(rightArmBone, rightArmRestRot, -(lift + wag));
-            // Antebrat usor indoit
-            BoneX(rightForeArmBone, rightForeArmRestRot, 15f);
+            float lift = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(e / 0.35f));
+            Vector3 waveDirection = (avatarRoot.up * 0.8f - avatarRoot.right * 0.6f).normalized;
+            AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, waveDirection, lift);
+            Vector3 handDirection = (avatarRoot.up * 0.8f +
+                                      avatarRoot.right * (0.45f + Mathf.Sin(e * 9f) * 0.2f)).normalized;
+            AimBoneToward(rightForeArmBone, rightHandBone, rightForeArmRestRot, handDirection, lift);
             ApplyFingerPose(FingerPose.Wave);
             return;
         }
         float r = Mathf.Clamp01((e-DUR)/RET);
-        BoneZ(rightArmBone, rightArmRestRot, 0f, r);
-        SmoothBone(rightForeArmBone, rightForeArmRestRot, r * blendSpeed);
+        AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, -avatarRoot.up, 1f - r);
+        AimBoneToward(rightForeArmBone, rightHandBone, rightForeArmRestRot, -avatarRoot.up, 1f - r);
         if (r >= 1f) { waveActive = false; actionStatus = "Salut terminat."; Restore(); }
     }
 
@@ -650,23 +657,23 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (e < UP)
         {
             float t = Mathf.SmoothStep(0f,1f,e/UP);
-            BoneZ(leftArmBone,   leftArmRestRot,    90f * t);
-            BoneZ(rightArmBone,  rightArmRestRot,  -90f * t);
+            AimBoneToward(leftArmBone, leftForeArmBone, leftArmRestRot, avatarRoot.up, t);
+            AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, avatarRoot.up, t);
             BoneX(leftForeArmBone,  leftForeArmRestRot,  -t * 10f);
             BoneX(rightForeArmBone, rightForeArmRestRot, -t * 10f);
             return;
         }
         if (e < UP+HOLD)
         {
-            BoneZ(leftArmBone,  leftArmRestRot,   90f);
-            BoneZ(rightArmBone, rightArmRestRot, -90f);
+            AimBoneToward(leftArmBone, leftForeArmBone, leftArmRestRot, avatarRoot.up, 1f);
+            AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, avatarRoot.up, 1f);
             return;
         }
         if (e < total)
         {
             float t = Mathf.SmoothStep(0f,1f,(e-UP-HOLD)/DN);
-            BoneZ(leftArmBone,  leftArmRestRot,   90f*(1f-t));
-            BoneZ(rightArmBone, rightArmRestRot, -90f*(1f-t));
+            AimBoneToward(leftArmBone, leftForeArmBone, leftArmRestRot, avatarRoot.up, 1f - t);
+            AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, avatarRoot.up, 1f - t);
             return;
         }
         raiseActive = false; actionStatus = "Brate ridicate."; Restore();
@@ -678,28 +685,38 @@ public class AvatarVisemeAnimator : MonoBehaviour
         float e = Time.time - swimStart;
         if (e < swimDur)
         {
-            float lA = Mathf.Sin(e * Mathf.PI * 2f)       * 85f;
-            float rA = Mathf.Sin(e * Mathf.PI * 2f + Mathf.PI) * 85f;
-            float lF = Mathf.Sin(e * Mathf.PI * 2f + 1f)  * 40f; // forearm
-            float rF = Mathf.Sin(e * Mathf.PI * 2f + Mathf.PI + 1f) * 40f;
-            SmoothBone(leftArmBone,       leftArmRestRot       * Quaternion.Euler(lA, 0f, 0f), blendSpeed);
-            SmoothBone(rightArmBone,      rightArmRestRot      * Quaternion.Euler(rA, 0f, 0f), blendSpeed);
-            SmoothBone(leftForeArmBone,   leftForeArmRestRot   * Quaternion.Euler(lF, 0f, 0f), blendSpeed);
-            SmoothBone(rightForeArmBone,  rightForeArmRestRot  * Quaternion.Euler(rF, 0f, 0f), blendSpeed);
-            SmoothBone(upperBodyBone, upperBodyRestRot * Quaternion.Euler(0f, 0f, Mathf.Sin(e*2f)*7f), 5f);
-            if (avatarRoot != null) avatarRoot.localPosition = Vector3.Lerp(avatarRoot.localPosition,
-                rootRestPos + Vector3.up * Mathf.Sin(e*4f)*0.025f, Time.deltaTime*blendSpeed);
-            actionStatus = $"Inot... {Mathf.Max(0f,swimDur-e):F0}s"; return;
+            float poseBlend = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(e / RET));
+            float cycle = e * Mathf.PI * 2f * 0.65f;
+            float leftStroke = Mathf.Sin(cycle);
+            float rightStroke = Mathf.Sin(cycle + Mathf.PI);
+            SetSwimRootPose(poseBlend);
+            RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right,
+                poseBlend * (55f + leftStroke * 105f), blendSpeed);
+            RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right,
+                poseBlend * (55f + rightStroke * 105f), blendSpeed);
+            RotateBoneAroundAxis(leftForeArmBone, leftForeArmRestRot, avatarRoot.right,
+                poseBlend * (25f + Mathf.Max(0f, leftStroke) * 25f), blendSpeed);
+            RotateBoneAroundAxis(rightForeArmBone, rightForeArmRestRot, avatarRoot.right,
+                poseBlend * (25f + Mathf.Max(0f, rightStroke) * 25f), blendSpeed);
+            RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right,
+                poseBlend * leftStroke * 18f, blendSpeed);
+            RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right,
+                poseBlend * rightStroke * 18f, blendSpeed);
+            RotateBoneAroundAxis(upperBodyBone, upperBodyRestRot, avatarRoot.forward,
+                poseBlend * leftStroke * 4f, 5f);
+            actionStatus = $"Înoată... {Mathf.Max(0f, swimDur - e):F0}s";
+            return;
         }
         float rec = Mathf.Clamp01((e-swimDur)/RET);
-        SmoothBone(leftArmBone,      leftArmRestRot,      rec);
-        SmoothBone(rightArmBone,     rightArmRestRot,     rec);
-        SmoothBone(leftForeArmBone,  leftForeArmRestRot,  rec);
-        SmoothBone(rightForeArmBone, rightForeArmRestRot, rec);
+        SetSwimRootPose(1f - rec);
+        RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(leftForeArmBone, leftForeArmRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(rightForeArmBone, rightForeArmRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, 0f, blendSpeed);
+        RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, 0f, blendSpeed);
         SmoothBone(upperBodyBone, upperBodyRestRot, rec);
-        if (avatarRoot != null) avatarRoot.localPosition = Vector3.Lerp(
-            avatarRoot.localPosition, rootRestPos, Time.deltaTime*blendSpeed);
-        if (rec >= 1f) { swimActive = false; actionStatus = "Inot terminat."; Restore(); }
+        if (rec >= 1f) { swimActive = false; actionStatus = "Înot terminat."; Restore(); }
     }
 
     private void UpdateJump()
@@ -721,17 +738,14 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
             // Genunchi indoiti la decolare si aterizare
             float kn = (1f - lft) * 22f;
-            if (leftLegBone  != null) leftLegBone.localRotation  =
-                leftLegRestRot  * Quaternion.Euler(-kn, 0f, 0f);
-            if (rightLegBone != null) rightLegBone.localRotation =
-                rightLegRestRot * Quaternion.Euler(-kn, 0f, 0f);
+            RotateBoneAroundAxis(leftLegBone, leftLegRestRot, avatarRoot.right, -kn, blendSpeed);
+            RotateBoneAroundAxis(rightLegBone, rightLegRestRot, avatarRoot.right, -kn, blendSpeed);
 
             // Brate ridicate in aer — direct, vizibil
-            float armZ = lft * 50f;
-            if (leftArmBone  != null) leftArmBone.localRotation  =
-                leftArmRestRot  * Quaternion.Euler(0f, 0f,  armZ);
-            if (rightArmBone != null) rightArmBone.localRotation =
-                rightArmRestRot * Quaternion.Euler(0f, 0f, -armZ);
+            Vector3 leftJumpDirection = (avatarRoot.up + avatarRoot.right * 0.7f).normalized;
+            Vector3 rightJumpDirection = (avatarRoot.up - avatarRoot.right * 0.7f).normalized;
+            AimBoneToward(leftArmBone, leftForeArmBone, leftArmRestRot, leftJumpDirection, lft);
+            AimBoneToward(rightArmBone, rightForeArmBone, rightArmRestRot, rightJumpDirection, lft);
 
             actionStatus = $"Saritura {Mathf.Min(jumpReps, (int)(e/SPJ)+1)}/{jumpReps}";
             return;
@@ -750,7 +764,7 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (rightLegBone != null) rightLegBone.localRotation = Quaternion.Slerp(
             rightLegBone.localRotation, rightLegRestRot, Time.deltaTime * blendSpeed);
         if (leftArmBone  != null) leftArmBone.localRotation  = Quaternion.Slerp(
-            leftArmBone.localRotation,  leftArmRestRot,  Time.deltaTime * blendSpeed);
+            leftArmBone.localRotation, leftArmRestRot, Time.deltaTime * blendSpeed);
         if (rightArmBone != null) rightArmBone.localRotation = Quaternion.Slerp(
             rightArmBone.localRotation, rightArmRestRot, Time.deltaTime * blendSpeed);
         if (r >= 1f) { jumpActive = false; actionStatus = $"Gata: {jumpReps} sarituri."; Restore(); }
@@ -783,10 +797,10 @@ public class AvatarVisemeAnimator : MonoBehaviour
             float fAR  = -fAL;
             if (avatarRoot != null) avatarRoot.localPosition = Vector3.Lerp(
                 avatarRoot.localPosition, rootRestPos + Vector3.up * bob, Time.deltaTime*blendSpeed);
-            SmoothBone(leftArmBone,      leftArmRestRot      * Quaternion.Euler(swL, 0f, 0f), blendSpeed);
-            SmoothBone(rightArmBone,     rightArmRestRot     * Quaternion.Euler(swR, 0f, 0f), blendSpeed);
-            SmoothBone(leftForeArmBone,  leftForeArmRestRot  * Quaternion.Euler(fAL, 0f, 0f), blendSpeed);
-            SmoothBone(rightForeArmBone, rightForeArmRestRot * Quaternion.Euler(fAR, 0f, 0f), blendSpeed);
+            RotateBoneAroundAxis(leftArmBone, leftArmRestRot, avatarRoot.right, swL, blendSpeed);
+            RotateBoneAroundAxis(rightArmBone, rightArmRestRot, avatarRoot.right, swR, blendSpeed);
+            RotateBoneAroundAxis(leftForeArmBone, leftForeArmRestRot, avatarRoot.right, fAL, blendSpeed);
+            RotateBoneAroundAxis(rightForeArmBone, rightForeArmRestRot, avatarRoot.right, fAR, blendSpeed);
             SmoothBone(upperBodyBone, upperBodyRestRot * Quaternion.Euler(0f, Mathf.Sin(e*2.4f*Mathf.PI*2f)*5f, 0f), 5f);
             if (hipsBone != null) SmoothBone(hipsBone, hipsRestRot * Quaternion.Euler(0f, Mathf.Sin(e*4.8f*Mathf.PI*2f)*9f, 0f), 6f);
             actionStatus = "Dans!"; return;
@@ -819,6 +833,48 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (b == null) return;
         b.localRotation = Quaternion.Slerp(b.localRotation,
             rest * Quaternion.Euler(0f, 0f, az), Mathf.Max(Time.deltaTime * blendSpeed, r));
+    }
+
+    private void RotateBoneAroundAxis(Transform bone, Quaternion restRotation, Vector3 worldAxis,
+        float angle, float speed)
+    {
+        if (bone == null) return;
+        Quaternion parentRotation = bone.parent != null ? bone.parent.rotation : Quaternion.identity;
+        Quaternion restWorldRotation = parentRotation * restRotation;
+        Quaternion targetWorldRotation = Quaternion.AngleAxis(angle, worldAxis) * restWorldRotation;
+        Quaternion targetLocalRotation = Quaternion.Inverse(parentRotation) * targetWorldRotation;
+        bone.localRotation = Quaternion.Slerp(bone.localRotation, targetLocalRotation, Time.deltaTime * speed);
+    }
+
+    private void AimBoneToward(Transform bone, Transform child, Quaternion restRotation,
+        Vector3 targetDirection, float weight)
+    {
+        if (bone == null || child == null || targetDirection.sqrMagnitude < 0.0001f) return;
+        Quaternion parentRotation = bone.parent != null ? bone.parent.rotation : Quaternion.identity;
+        Quaternion restWorldRotation = parentRotation * restRotation;
+        Vector3 restDirection = restWorldRotation * child.localPosition;
+        if (restDirection.sqrMagnitude < 0.0001f) return;
+        Vector3 blendedDirection = Vector3.Slerp(restDirection.normalized, targetDirection.normalized,
+            Mathf.Clamp01(weight));
+        Quaternion targetWorldRotation = Quaternion.FromToRotation(restDirection, blendedDirection) *
+                                         restWorldRotation;
+        Quaternion targetLocalRotation = Quaternion.Inverse(parentRotation) * targetWorldRotation;
+        bone.localRotation = Quaternion.Slerp(bone.localRotation, targetLocalRotation,
+            Time.deltaTime * blendSpeed);
+    }
+
+    private void SetSwimRootPose(float weight)
+    {
+        if (avatarRoot == null) return;
+        Quaternion swimRotation = rootRestRot * Quaternion.Euler(90f, 0f, 0f);
+        Quaternion targetRotation = Quaternion.Slerp(rootRestRot, swimRotation, Mathf.Clamp01(weight));
+        avatarRoot.localRotation = Quaternion.Slerp(avatarRoot.localRotation, targetRotation,
+            Time.deltaTime * blendSpeed);
+
+        Vector3 pivot = hipsBone != null ? hipsBone.localPosition : Vector3.up;
+        Vector3 targetPosition = rootRestPos + rootRestRot * pivot - avatarRoot.localRotation * pivot;
+        avatarRoot.localPosition = Vector3.Lerp(avatarRoot.localPosition, targetPosition,
+            Time.deltaTime * blendSpeed);
     }
 
     private void SmoothBone(Transform b, Quaternion target, float speed)
@@ -927,5 +983,21 @@ public class AvatarVisemeAnimator : MonoBehaviour
         Debug.Log($"[Avatar] head={headBone?.name??"null"} eyes=L:{leftEyeBone?.name??"null"}/R:{rightEyeBone?.name??"null"} " +
                   $"fingers=L:{leftIndex1?.name??"null"}/R:{rightIndex1?.name??"null"} " +
                   $"forearm=L:{leftForeArmBone?.name??"null"}/R:{rightForeArmBone?.name??"null"}");
+    }
+
+    private void SetNaturalArmPose(Transform armBone, Transform forearmBone, ref Quaternion restRotation)
+    {
+        if (armBone == null || forearmBone == null || armBone.parent == null)
+            return;
+
+        Vector3 armDirection = armBone.TransformVector(forearmBone.localPosition);
+        if (armDirection.sqrMagnitude < 0.0001f)
+            return;
+
+        Quaternion worldCorrection = Quaternion.FromToRotation(armDirection, -avatarRoot.up);
+        Quaternion parentRotation = armBone.parent.rotation;
+        armBone.localRotation = Quaternion.Inverse(parentRotation) * worldCorrection *
+                                parentRotation * armBone.localRotation;
+        restRotation = armBone.localRotation;
     }
 }

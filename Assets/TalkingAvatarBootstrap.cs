@@ -33,6 +33,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
 
     private async void Start()
     {
+        speechLanguageIndex = 1;
         Camera sceneCamera = Camera.main;
         if (sceneCamera == null)
         {
@@ -53,9 +54,11 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         chat = gameObject.AddComponent<OllamaStreamTester>();
         chat.audioSource    = audioSource;
         chat.avatarAnimator = avatarAnimator;
+        chat.speechLanguage = "Romanian";
 
         CheckOllamaAsync();
         await LoadAvatar();
+        chat.PresentProject();
     }
 
     private async Task LoadAvatar()
@@ -145,9 +148,11 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         // ── Titlu + status ─────────────────────────────────────────────────
         GUILayout.Label("TALKING AVATAR 3D", TitleStyle());
         GUILayout.Label(loadStatus);
-        GUILayout.Label(chat != null && chat.IsStreaming
-            ? "Ollama: generează răspunsul..."
-            : ollamaStatus);
+        GUILayout.Label(chat != null && chat.IsCommandInProgress
+            ? "Comanda este în curs..."
+            : chat != null && chat.IsStreaming
+                ? "Ollama sau vocea este în curs..."
+                : ollamaStatus);
         if (chat != null)
         {
             GUILayout.Label(chat.SpeechStatus);
@@ -182,9 +187,10 @@ public class TalkingAvatarBootstrap : MonoBehaviour
 
         // Blocam inputul tastaturii avatarului cand userul scrie in chat
         bool chatFocused = GUI.GetNameOfFocusedControl() == "TalkingAvatarPrompt";
-        AvatarVisemeAnimator.InputBlocked = chatFocused;
+        AvatarVisemeAnimator.InputBlocked = chatFocused || (chat != null && chat.IsStreaming);
 
         // Buton reset pozitie (daca avatarul a zburat)
+        GUI.enabled = chat != null && !chat.IsStreaming;
         if (avatarAnimator != null)
         {
             if (GUILayout.Button("↺ Reset pozitie", BtnStyle()))
@@ -197,25 +203,36 @@ public class TalkingAvatarBootstrap : MonoBehaviour
 
         // Rând 1: animații principale
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Wave",          BtnStyle())) avatarAnimator?.StartWaving();
-        if (GUILayout.Button("Ridică brațe",  BtnStyle())) avatarAnimator?.StartRaisingArms();
-        if (GUILayout.Button("Sari",          BtnStyle())) avatarAnimator?.StartJumping(3);
-        if (GUILayout.Button("Inoată",        BtnStyle())) avatarAnimator?.StartSwimming(3);
+        if (GUILayout.Button("Wave",         BtnStyle()))
+            RunAvatarCommand("Salută", "salut", () => avatarAnimator != null && avatarAnimator.StartWaving());
+        if (GUILayout.Button("Ridică brațe", BtnStyle()))
+            RunAvatarCommand("Ridică brațele", "ridic brațele", () => avatarAnimator != null && avatarAnimator.StartRaisingArms());
+        if (GUILayout.Button("Sari",          BtnStyle()))
+            RunAvatarCommand("Sari", "sar", () => avatarAnimator != null && avatarAnimator.StartJumping(3));
+        if (GUILayout.Button("Înoată",        BtnStyle()))
+            RunAvatarCommand("Înoată", "înot", () => avatarAnimator != null && avatarAnimator.StartSwimming(3));
         GUILayout.EndHorizontal();
 
         // Rând 2: animații secundare
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Dans",          BtnStyle())) avatarAnimator?.StartDancing();
-        if (GUILayout.Button("Rotește cap",   BtnStyle())) avatarAnimator?.StartHeadRotation(45f, 60f);
-        if (GUILayout.Button("Flotări 3",     BtnStyle())) avatarAnimator?.StartPushUps(3);
-        if (GUILayout.Button("Mers 5",        BtnStyle())) avatarAnimator?.StartWalking(5);
+        if (GUILayout.Button("Dans",        BtnStyle()))
+            RunAvatarCommand("Dansează", "dansez", () => avatarAnimator != null && avatarAnimator.StartDancing());
+        if (GUILayout.Button("Rotește cap", BtnStyle()))
+            RunAvatarCommand("Rotește capul", "rotesc capul", () => avatarAnimator != null && avatarAnimator.StartHeadRotation(45f, 60f));
+        if (GUILayout.Button("Flotări 3",   BtnStyle()))
+            RunAvatarCommand("Fă 3 flotări", "fac 3 flotări", () => avatarAnimator != null && avatarAnimator.StartPushUps(3));
+        if (GUILayout.Button("Mers 5",      BtnStyle()))
+            RunAvatarCommand("Fă 5 pași", "fac 5 pași", () => avatarAnimator != null && avatarAnimator.StartWalking(5));
         GUILayout.EndHorizontal();
+        GUI.enabled = true;
 
         // Rând 3: rotire avatar
+        GUI.enabled = chat != null && !chat.IsStreaming;
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("← Rotire",  BtnStyle(), GUILayout.ExpandWidth(true))) avatarAnimator?.RotateAvatar(-45f);
         if (GUILayout.Button("Rotire →",  BtnStyle(), GUILayout.ExpandWidth(true))) avatarAnimator?.RotateAvatar( 45f);
         GUILayout.EndHorizontal();
+        GUI.enabled = true;
 
         // Legendă taste
         GUILayout.Space(4f);
@@ -237,10 +254,17 @@ public class TalkingAvatarBootstrap : MonoBehaviour
 
     private void SendPrompt()
     {
-        if (chat == null || string.IsNullOrWhiteSpace(prompt)) return;
+        if (chat == null || chat.IsStreaming || string.IsNullOrWhiteSpace(prompt)) return;
         string submittedPrompt = prompt;
         prompt = string.Empty;
         chat.SendPrompt(submittedPrompt);
+    }
+
+    private void RunAvatarCommand(string command, string actionDescription, Func<bool> execute)
+    {
+        if (chat == null || chat.IsStreaming) return;
+        bool executed = execute();
+        chat.ReportAvatarCommand(command, actionDescription, executed);
     }
 
     // ── Stiluri GUI ─────────────────────────────────────────────────────────

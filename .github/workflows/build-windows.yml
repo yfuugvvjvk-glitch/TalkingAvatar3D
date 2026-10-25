@@ -1,0 +1,42 @@
+name: Build Windows Player
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Unity Windows player
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Check Unity license
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        run: |
+          if [ -z "$UNITY_LICENSE" ]; then
+            echo "::error::Add the Unity license file as the UNITY_LICENSE repository secret."
+            exit 1
+          fi
+
+      - name: Build Windows player
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          projectPath: .
+          unityVersion: 6000.2.3f1
+          targetPlatform: StandaloneWindows64
+          buildsPath: build
+          buildName: TalkingAvatar3D
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: TalkingAvatar3D-Windows
+          path: build/StandaloneWindows64
+          if-no-files-found: error

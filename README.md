@@ -17,7 +17,15 @@ Scriptul:
 2. Instalează dependențele Python și pornește **serverul TTS**
 3. Deschide **Unity** cu proiectul
 
-Când Unity e deschis: apasă **Play ▶**, alege limba, scrie un mesaj și apasă Enter.
+Când Unity e deschis: apasă **Play ▶**. Avatarul se prezintă automat în română;
+apoi poți alege limba, scrie un mesaj și apăsa Enter.
+
+## Compilare pe GitHub
+
+Workflow-ul **Build Windows Player** creează un executabil Windows la fiecare push
+pe `main` sau la pornire manuală din GitHub Actions. Înainte de prima rulare,
+adaugă licența Unity ca repository secret cu numele `UNITY_LICENSE`.
+Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
 
 ---
 
@@ -111,9 +119,13 @@ Verifică serviciile înainte de demonstrație:
 2. Apasă **Play**. Așteaptă confirmarea încărcării avatarului și verifică statusul
    Ollama din panoul aplicației.
 3. Alege **Română** sau **English**, introdu o întrebare și apasă **Trimite**.
-   Răspunsul generat local apare în istoricul chatului și este rostit de TTS.
+   Avatarul răspunde local la întrebări generale și introductive despre proiect,
+   informatică, geografie, știință și cultură generală. Răspunsurile sunt scurte;
+   pentru întrebări avansate poate să nu știe răspunsul.
 4. Demonstrează comenzile de animație: `Fă 5 pași`, `Fă 3 flotări`, `Salut`,
    `Sari` sau `Dansează`. Comenzile sunt disponibile și prin butoanele de control.
+   Pentru comenzile de animație, avatarul confirmă executarea printr-un mesaj fix;
+   răspunsul nu este generat de Ollama.
 5. Pentru cue-uri Rhubarb extrase din audio, instalează componenta opțională și
    repornește serverul TTS. Fără Rhubarb, aplicația estimează visemele din text.
 
@@ -137,7 +149,7 @@ buzelor.
 | --------------- | --------------- |
 | `Fă 5 pași`     | `Walk 5 steps`  |
 | `Fă 3 flotări`  | `Do 3 push-ups` |
-| Orice întrebare | Any question    |
+| Întrebări generale, simple | Simple general questions |
 
 Numărul de repetări: cifre (`5`) sau cuvinte (`cinci`, `five`). Default: 5.
 
