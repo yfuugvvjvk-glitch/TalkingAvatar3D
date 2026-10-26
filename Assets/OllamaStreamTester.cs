@@ -29,6 +29,7 @@ public class OllamaStreamTester : MonoBehaviour
     public TMP_Text       chatDisplay;
     public AudioSource    audioSource;
     public AvatarVisemeAnimator avatarAnimator;
+    public CompanionVisemeFace companionFace;
 
     // ─── Stare internă ───────────────────────────────────────────────────────
     private readonly object        streamLock   = new object();
@@ -381,6 +382,8 @@ public class OllamaStreamTester : MonoBehaviour
 
             if (avatarAnimator != null)
                 avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
+            if (companionFace != null)
+                companionFace.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
 
             StartPendingCommandAction();
             audioSource.clip = clip;

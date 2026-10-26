@@ -3,7 +3,7 @@
 **Aplicație Unity cu avatar 3D animat procedural, răspunsuri generate local cu Ollama și sinteză vocală.**
 
 > Scrie un mesaj → Ollama generează răspunsul în streaming → serviciul TTS redă vocea
-> → animația procedurală sincronizează mișcarea capului cu vorbirea.
+> → fața sferică separată articulează cuvintele, iar personajul poate executa comenzi.
 
 ---
 
@@ -46,18 +46,24 @@ Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
 [ Rhubarb Lip Sync ]  ──► cue-uri timed A-H per cadru audio
         │ (fallback: VisemeTextMapper G2P/silabic RO/EN)
         ▼
-[ AvatarVisemeAnimator (Unity C#) ]
+[ CompanionVisemeFace (Unity C#) ]
+   ├── Față sferică independentă, cu ochi și gură animată
    ├── Estimează visemele din text sau folosește cue-uri Rhubarb, dacă sunt disponibile
-   ├── Animează subtil capul; modelul curent nu are blendshapes pentru gură
+   └── Săgețile repoziționează fața pe ecran fără să miște personajul
+        │
+[ AvatarVisemeAnimator (Unity C#) ]
    └── Animații procedurale: mers, flotări, salut, sărituri, înot și dans
 ```
 
 ---
 
 Visemele sunt estimate din text (reguli pentru română și engleză) sau, dacă Rhubarb
-Lip Sync este instalat, extrase din audio. Animatorul folosește aceste indicii pentru
-o mișcare subtilă a capului. Modelul GLB inclus nu conține blendshapes/morph targets,
-deci aplicația **nu** animă forma gurii.
+Lip Sync este instalat, extrase din audio. Fața sferică folosește forme vizuale pentru
+deschiderea rotundă, zâmbet, buze închise, dinți pe buză, țuguiere și consoane. Fața
+articulează independent de personaj și se repoziționează din butoanele cu săgeți sau
+cu tastele I/J/K/L (I sus, J stânga, K jos, L dreapta). Săgețile tastaturii rămân
+disponibile pentru deplasarea personajului. Personajul principal rămâne liber să execute comenzile.
+Nu sunt necesare blendshapes pe modelul GLB.
 
 ---
 
@@ -101,8 +107,12 @@ py -m pip install -r requirements.txt
 py tts_server.py
 ```
 
-În Unity Hub, adaugă folderul repository-ului ca proiect existent, deschide-l cu
-Unity **6000.2.3f1**, deschide `Assets/Scenes/SampleScene.unity` și apasă **Play**.
+În Unity Hub, adaugă folderul repository-ului (folderul care conține `Assets`,
+`Packages` și `ProjectSettings`) ca proiect existent, deschide-l cu Unity
+**6000.2.3f1**, deschide `Assets/Scenes/SampleScene.unity` și apasă **Play**.
+După mutarea folderului proiectului, folosește **Add > Add project from disk** și
+selectează noua locație; intrarea veche din lista Unity Hub poate indica încă folderul
+mutat și trebuie eliminată din listă.
 `START.bat` automatizează pornirea serviciilor și Unity pe Windows, dar necesită ca
 Ollama, Python și Unity să fie deja instalate. Scriptul nu instalează Ollama sau Unity.
 
@@ -137,9 +147,7 @@ Verifică serviciile înainte de demonstrație:
 - Detectarea comenzilor de animație în română și engleză.
 - Estimarea visemelor din text și suport opțional Rhubarb pentru cue-uri din audio.
 
-**Limitare cunoscută:** modelul inclus nu are morph targets/blendshapes pentru gură.
-Lip-sync-ul este reprezentat printr-o mișcare subtilă a capului, nu prin deformarea
-buzelor.
+Fața vorbitoare este creată automat în Play Mode și nu necesită configurare de prefab.
 
 ---
 

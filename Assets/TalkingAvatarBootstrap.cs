@@ -13,6 +13,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
 
     private OllamaStreamTester chat;
     private AvatarVisemeAnimator avatarAnimator;
+    private CompanionVisemeFace companionFace;
     private AudioSource audioSource;
     private GltfImport avatarImport;
     private string prompt = string.Empty;
@@ -50,10 +51,13 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.playOnAwake = false;
         avatarAnimator = gameObject.AddComponent<AvatarVisemeAnimator>();
+        companionFace = gameObject.AddComponent<CompanionVisemeFace>();
+        companionFace.Initialize(sceneCamera);
 
         chat = gameObject.AddComponent<OllamaStreamTester>();
         chat.audioSource    = audioSource;
         chat.avatarAnimator = avatarAnimator;
+        chat.companionFace  = companionFace;
         chat.speechLanguage = "Romanian";
 
         CheckOllamaAsync();
@@ -188,6 +192,8 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         // Blocam inputul tastaturii avatarului cand userul scrie in chat
         bool chatFocused = GUI.GetNameOfFocusedControl() == "TalkingAvatarPrompt";
         AvatarVisemeAnimator.InputBlocked = chatFocused || (chat != null && chat.IsStreaming);
+        if (companionFace != null)
+            companionFace.InputBlocked = chatFocused;
 
         // Buton reset pozitie (daca avatarul a zburat)
         GUI.enabled = chat != null && !chat.IsStreaming;
@@ -250,6 +256,28 @@ public class TalkingAvatarBootstrap : MonoBehaviour
             SendPrompt();
             current.Use();
         }
+
+        DrawCompanionFaceControls();
+    }
+
+    private void DrawCompanionFaceControls()
+    {
+        const float panelWidth = 142f;
+        const float buttonSize = 34f;
+        Rect panel = new Rect(12f, 12f, panelWidth, 112f);
+        GUI.Box(panel, "Fața vorbitoare");
+        GUI.Label(new Rect(panel.x + 4f, panel.y + 97f, panel.width - 8f, 18f), "I/J/K/L sau butoanele");
+
+        GUI.enabled = companionFace != null;
+        if (GUI.Button(new Rect(panel.x + 54f, panel.y + 27f, buttonSize, buttonSize), "↑"))
+            companionFace.Move(0f, 0.04f);
+        if (GUI.Button(new Rect(panel.x + 17f, panel.y + 65f, buttonSize, buttonSize), "←"))
+            companionFace.Move(-0.04f, 0f);
+        if (GUI.Button(new Rect(panel.x + 54f, panel.y + 65f, buttonSize, buttonSize), "↓"))
+            companionFace.Move(0f, -0.04f);
+        if (GUI.Button(new Rect(panel.x + 91f, panel.y + 65f, buttonSize, buttonSize), "→"))
+            companionFace.Move(0.04f, 0f);
+        GUI.enabled = true;
     }
 
     private void SendPrompt()
