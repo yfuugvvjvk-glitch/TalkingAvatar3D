@@ -11,7 +11,7 @@ echo.
 set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 set "PROJECT_DIR=%~dp0"
 set "TTS_DIR=%~dp0Tools\TtsService"
-set "BUILD_EXE=%~dp0Build\TalkingAvatar3D.exe"
+set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
 set "OLLAMA_MODEL=qwen2.5:3b"
 
 REM ============================================================
@@ -22,10 +22,8 @@ if not exist "%BUILD_EXE%" (
     echo   %BUILD_EXE%
     echo.
     echo   Pasii necesari:
-    echo   1. Deschide proiectul in Unity
-    echo   2. File ^> Build Settings ^> Build
-    echo   3. Salveaza in folderul "Build" din acest director
-    echo   4. Numeste executabilul "TalkingAvatar3D.exe"
+    echo   1. Descarca build-ul din GitHub Actions (vezi README)
+    echo   2. Sau cere un nou pachet demo persoanei care a creat aplicatia
     echo.
     pause & exit /b 1
 )
