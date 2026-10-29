@@ -9,18 +9,31 @@
 
 ## ▶ Pornire rapidă — fără Unity instalat
 
-**Dublu-click pe `START_DEMO.bat`** din folderul proiectului.
+**Pasul 1 — Descarcă build-ul gata de pe GitHub:**
 
-Scriptul pornește automat:
+1. Mergi pe pagina GitHub a repository-ului
+2. Click pe **Actions** → selectează ultimul build reușit **"Build Windows Player"**
+3. Scroll jos la **Artifacts** → descarcă **`TalkingAvatar3D-Windows`**
+4. Dezarhivează zip-ul
 
-1. **Ollama** (descarcă modelul `qwen2.5:3b` la prima rulare, ~2 GB)
-2. **Serverul TTS** Python (instalează dependențele la prima rulare)
-3. **Aplicația** `Build\TalkingAvatar3D.exe` direct — fără Unity Editor
+**Pasul 2 — Pregătește folderul:**
 
-Când aplicația s-a deschis: avatarul se prezintă automat în română,
-apoi poți alege limba, scrie un mesaj și apăsa Enter.
+Copiază din repository lângă fișierele dezarhivate:
 
-> **Nu este nevoie de Unity instalat pentru a rula demo-ul.**
+```
+TalkingAvatar3D-Windows/
+├── TalkingAvatar3D.exe        ← din artifact (zip descarcat)
+├── TalkingAvatar3D_Data/      ← din artifact (zip descarcat)
+├── Tools/                     ← copiat din repo
+│   └── TtsService/
+└── START_DEMO.bat             ← copiat din repo
+```
+
+**Pasul 3 — Dublu-click pe `START_DEMO.bat`**
+
+Pornește automat Ollama + TTS + aplicația. Gata.
+
+> **Nu este nevoie de Unity instalat.**
 
 ---
 
@@ -168,11 +181,14 @@ TalkingAvatar3D/
 
 ---
 
-## Compilare pe GitHub Actions
+## Compilare automată pe GitHub Actions
 
-Workflow-ul **Build Windows Player** creează executabilul Windows la fiecare push
-pe `main` sau la pornire manuală. Adaugă licența Unity ca repository secret cu
-numele `UNITY_LICENSE`. Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
+La fiecare push pe `main`, workflow-ul **Build Windows Player** compilează automat
+executabilul Windows. Rezultatul apare ca artifact **`TalkingAvatar3D-Windows`**
+în tab-ul **Actions** de pe GitHub.
+
+**Prima configurare** (o singură dată): adaugă licența Unity ca repository secret
+cu numele `UNITY_LICENSE`. Fără acest secret, build-ul va eșua cu eroare.
 
 ---
 
