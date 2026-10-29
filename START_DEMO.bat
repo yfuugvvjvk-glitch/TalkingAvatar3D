@@ -13,22 +13,11 @@ set "PROJECT_DIR=%~dp0"
 set "TTS_DIR=%~dp0Tools\TtsService"
 set "OLLAMA_MODEL=qwen2.5:3b"
 
-REM Cauta exe-ul in acelasi folder SAU in subfolder Build\
-set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
-if not exist "%BUILD_EXE%" set "BUILD_EXE=%~dp0Build\TalkingAvatar3D.exe"
-
-REM ============================================================
-REM 0. Verificam ca exista build-ul
-REM ============================================================
-if not exist "%BUILD_EXE%" (
-    echo   EROARE: Nu gasesc fisierul:
-    echo   %BUILD_EXE%
-    echo.
-    echo   Pasii necesari:
-    echo   1. Descarca build-ul din GitHub Actions (vezi README)
-    echo   2. Sau cere un nou pachet demo persoanei care a creat aplicatia
-    echo.
-    pause & exit /b 1
+REM Cauta exe-ul in Build\ sau direct langa bat
+if exist "%~dp0Build\TalkingAvatar3D.exe" (
+    set "BUILD_EXE=%~dp0Build\TalkingAvatar3D.exe"
+) else (
+    set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
 )
 
 REM ============================================================
@@ -64,8 +53,9 @@ if %errorlevel% equ 0 (
 
 if not exist "%OLLAMA_EXE%" (
     echo.
-    echo   EROARE: Ollama nu a fost gasit!
-    echo   Descarca si instaleaza de la: https://ollama.com
+    echo   EROARE: Ollama nu a fost gasit la:
+    echo   %OLLAMA_EXE%
+    echo   Descarca de la https://ollama.com
     echo.
     pause & exit /b 1
 )
@@ -117,20 +107,21 @@ echo [3/3] Pornire server TTS...
 curl.exe -s --max-time 2 http://127.0.0.1:5000/health >nul 2>&1
 if %errorlevel% equ 0 (
     echo       Serverul TTS ruleaza deja
-    goto :launch
+    goto :step4
 )
 
 if not exist "%TTS_DIR%\tts_server.py" (
-    echo   EROARE: Nu gasesc serverul TTS la:
-    echo   %TTS_DIR%\tts_server.py
+    echo   EROARE: Nu gasesc %TTS_DIR%\tts_server.py
     pause & exit /b 1
 )
 
-echo       Instalez dependentele Python (prima rulare poate dura 1-2 minute)...
+echo       Instalez dependentele Python...
+echo       (poate dura 1-2 minute la prima rulare)
 %PY_CMD% -m pip install -r "%TTS_DIR%\requirements.txt" --quiet --no-warn-script-location 2>&1
 if %errorlevel% neq 0 (
     echo.
     echo   EROARE la instalarea dependentelor Python.
+    echo   Incearca manual: py -m pip install -r Tools\TtsService\requirements.txt
     pause & exit /b 1
 )
 echo       Dependente OK
@@ -147,27 +138,37 @@ if %errorlevel% equ 0 goto :ttsready
 set /a RETRY+=1
 if %RETRY% lss 8 goto :waittts
 echo       ATENTIE: TTS nu a pornit in 16 secunde.
-echo       Avatarul va functiona fara voce.
-goto :launch
+echo       Animatia merge si fara TTS (fara voce).
+goto :step4
 
 :ttsready
 echo       Server TTS OK
 
-:launch
+:step4
 REM ============================================================
-REM Lanseaza aplicatia
+REM 4. Lanseaza aplicatia
 REM ============================================================
 echo.
+echo [4/4] Lansez aplicatia...
+
+if not exist "%BUILD_EXE%" (
+    echo   EROARE: Nu gasesc executabilul:
+    echo   %BUILD_EXE%
+    echo   Asigura-te ca ai dezarhivat corect pachetul demo.
+    pause & exit /b 1
+)
+
+start "" "%BUILD_EXE%"
+echo       Aplicatia pornita.
+
+echo.
 echo ============================================================
-echo   Lansez aplicatia...
+echo   Totul pornit cu succes!
 echo.
 echo   Ollama  : http://localhost:11434
 echo   TTS     : http://127.0.0.1:5000/health
-echo ============================================================
 echo.
-
-start "" "%BUILD_EXE%"
-
-echo   Aplicatia a pornit. Aceasta fereastra poate fi inchisa.
+echo   Aceasta fereastra poate fi inchisa.
+echo ============================================================
 echo.
 pause
