@@ -5,6 +5,7 @@ title Creare pachet demo
 set "PROJECT_DIR=%~dp0"
 set "BUILD_DIR=%~dp0Build"
 set "TOOLS_DIR=%~dp0Tools"
+set "DEMO_DIR=%~dp0TalkingAvatar3D-Demo"
 set "OUTPUT=%~dp0TalkingAvatar3D-Demo.zip"
 
 echo.
@@ -20,38 +21,42 @@ if not exist "%BUILD_DIR%\TalkingAvatar3D.exe" (
     pause & exit /b 1
 )
 
-REM Sterge zip-ul vechi daca exista
+REM Sterge folderul si zip-ul vechi
+if exist "%DEMO_DIR%" rmdir /s /q "%DEMO_DIR%"
 if exist "%OUTPUT%" del "%OUTPUT%"
 
-echo   Creez arhiva...
+echo   Copiez fisierele...
 
-REM Folosim PowerShell pentru zip
-powershell -Command ^
-    "$src = '%BUILD_DIR:\=\\%'; " ^
-    "$tools = '%TOOLS_DIR:\=\\%'; " ^
-    "$bat = '%PROJECT_DIR:\=\\%START_DEMO.bat'; " ^
-    "$out = '%OUTPUT:\=\\%'; " ^
-    "$tmp = Join-Path $env:TEMP 'TalkingAvatar3D-Demo'; " ^
-    "if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }; " ^
-    "New-Item -ItemType Directory $tmp | Out-Null; " ^
-    "Copy-Item -Path $src\* -Destination $tmp -Recurse; " ^
-    "Copy-Item -Path $tools -Destination $tmp -Recurse; " ^
-    "Copy-Item -Path $bat -Destination $tmp; " ^
-    "Compress-Archive -Path $tmp\* -DestinationPath $out -Force; " ^
-    "Remove-Item $tmp -Recurse -Force; " ^
-    "Write-Host 'Gata!'"
+REM Creaza folderul demo
+mkdir "%DEMO_DIR%"
+
+REM Copiaza tot din Build/
+xcopy "%BUILD_DIR%\*" "%DEMO_DIR%\" /E /I /Q
+
+REM Copiaza Tools/
+xcopy "%TOOLS_DIR%\*" "%DEMO_DIR%\Tools\" /E /I /Q
+
+REM Copiaza START_DEMO.bat
+copy "%PROJECT_DIR%START_DEMO.bat" "%DEMO_DIR%\START_DEMO.bat" >nul
+
+echo   Creez arhiva zip...
+
+powershell -Command "Compress-Archive -Path '%DEMO_DIR%\*' -DestinationPath '%OUTPUT%' -Force"
+
+REM Sterge folderul temporar
+rmdir /s /q "%DEMO_DIR%"
 
 if exist "%OUTPUT%" (
     echo.
     echo   ============================================================
-    echo   Pachetul a fost creat:
+    echo   GATA! Arhiva creata:
     echo   %OUTPUT%
     echo   ============================================================
     echo   Trimite acest fisier pe WeTransfer / Google Drive / USB.
     echo   Destinatarul dezarhiveaza si da dublu-click pe START_DEMO.bat
     echo.
 ) else (
-    echo   EROARE: Arhiva nu a fost creata.
+    echo   EROARE: Arhiva nu a fost creata!
 )
 
 pause
