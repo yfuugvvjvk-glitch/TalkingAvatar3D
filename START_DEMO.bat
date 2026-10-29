@@ -11,8 +11,11 @@ echo.
 set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 set "PROJECT_DIR=%~dp0"
 set "TTS_DIR=%~dp0Tools\TtsService"
-set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
 set "OLLAMA_MODEL=qwen2.5:3b"
+
+REM Cauta exe-ul in acelasi folder SAU in subfolder Build\
+set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
+if not exist "%BUILD_EXE%" set "BUILD_EXE=%~dp0Build\TalkingAvatar3D.exe"
 
 REM ============================================================
 REM 0. Verificam ca exista build-ul
