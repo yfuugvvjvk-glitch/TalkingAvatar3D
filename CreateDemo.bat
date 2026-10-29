@@ -36,8 +36,9 @@ xcopy "%BUILD_DIR%\*" "%DEMO_DIR%\" /E /I /Q
 REM Copiaza Tools/
 xcopy "%TOOLS_DIR%\*" "%DEMO_DIR%\Tools\" /E /I /Q
 
-REM Copiaza START_DEMO.bat
+REM Copiaza START_DEMO.bat si CITESTE-MA.txt
 copy "%PROJECT_DIR%START_DEMO.bat" "%DEMO_DIR%\START_DEMO.bat" >nul
+copy "%PROJECT_DIR%CITESTE-MA.txt" "%DEMO_DIR%\CITESTE-MA.txt" >nul
 
 echo   Creez arhiva zip...
 

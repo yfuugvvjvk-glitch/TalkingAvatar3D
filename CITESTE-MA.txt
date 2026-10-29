@@ -1,0 +1,36 @@
+============================================================
+  TALKING AVATAR 3D - Instructiuni de instalare
+============================================================
+
+Inainte de prima rulare, instaleaza urmatoarele doua programe:
+
+------------------------------------------------------------
+PASUL 1 - Instaleaza Ollama
+------------------------------------------------------------
+1. Mergi la: https://ollama.com
+2. Descarca si instaleaza Ollama (next - next - finish)
+3. Nu trebuie sa faci nimic altceva, se instaleaza singur
+
+------------------------------------------------------------
+PASUL 2 - Instaleaza Python
+------------------------------------------------------------
+1. Mergi la: https://python.org/downloads
+2. Descarca Python 3.10 sau mai nou
+3. La instalare BIFEAZA "Add Python to PATH" (important!)
+4. Apoi next - next - finish
+
+------------------------------------------------------------
+PASUL 3 - Porneste aplicatia
+------------------------------------------------------------
+1. Dublu-click pe START_DEMO.bat
+2. Asteapta sa se descarce modelul AI (~2 GB, o singura data)
+3. Aplicatia se deschide automat
+
+------------------------------------------------------------
+NOTA
+------------------------------------------------------------
+- La prima rulare dureaza mai mult (descarca modelul AI ~2 GB)
+- Urmatoarele rulari pornesc rapid
+- Daca apare o eroare, verifica ca Ollama si Python sunt instalate
+
+============================================================
