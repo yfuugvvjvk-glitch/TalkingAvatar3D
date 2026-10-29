@@ -64,30 +64,48 @@ public class CompanionVisemeFace : MonoBehaviour
 
     private void CreateMaterials()
     {
-        Shader headShader = Shader.Find("Universal Render Pipeline/Lit");
-        if (headShader == null) headShader = Shader.Find("Standard");
-        Shader featureShader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (featureShader == null) featureShader = Shader.Find("Unlit/Color");
-        if (featureShader == null) featureShader = headShader;
-
-        headMaterial = CreateMaterial(headShader, new Color(0.98f, 0.72f, 0.43f));
-        eyeMaterial = CreateMaterial(featureShader, Color.white);
-        pupilMaterial = CreateMaterial(featureShader, new Color(0.04f, 0.07f, 0.12f));
-        lipMaterial = CreateMaterial(featureShader, new Color(0.78f, 0.08f, 0.18f));
-        mouthMaterial = CreateMaterial(featureShader, new Color(0.08f, 0.01f, 0.025f));
-        teethMaterial = CreateMaterial(featureShader, new Color(1f, 1f, 0.94f));
+        headMaterial  = CreateMaterial(new Color(0.98f, 0.72f, 0.43f));
+        eyeMaterial   = CreateMaterial(Color.white);
+        pupilMaterial = CreateMaterial(new Color(0.04f, 0.07f, 0.12f));
+        lipMaterial   = CreateMaterial(new Color(0.78f, 0.08f, 0.18f));
+        mouthMaterial = CreateMaterial(new Color(0.08f, 0.01f, 0.025f));
+        teethMaterial = CreateMaterial(new Color(1f, 1f, 0.94f));
     }
 
-    private static Material CreateMaterial(Shader shader, Color color)
+    private static Material CreateMaterial(Color color)
     {
+        // Încearcă shaderele URP în ordine, cu fallback garantat la Sprites/Default
+        // care este întotdeauna inclus în build indiferent de pipeline
+        string[] candidates = new[]
+        {
+            "Universal Render Pipeline/Unlit",
+            "Universal Render Pipeline/Lit",
+            "Unlit/Color",
+            "Sprites/Default",
+        };
+
+        Shader shader = null;
+        foreach (string name in candidates)
+        {
+            shader = Shader.Find(name);
+            if (shader != null) break;
+        }
+
         if (shader == null)
         {
-            Debug.LogError("Nu a fost găsit un shader compatibil pentru fața vorbitoare.");
-            return null;
+            // Ultimul fallback: shader-ul default al Unity, garantat prezent
+            shader = Shader.Find("Hidden/InternalErrorShader");
+            Debug.LogWarning("[CompanionVisemeFace] Nu s-a găsit niciun shader compatibil.");
         }
 
         Material material = new Material(shader);
-        material.color = color;
+
+        // Setează culoarea — URP folosește _BaseColor, pipeline clasic folosește _Color
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", color);
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", color);
+
         return material;
     }
 

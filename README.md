@@ -1,31 +1,90 @@
 # Talking Avatar 3D — Grafică pe Calculator
 
-**Aplicație Unity cu avatar 3D animat procedural, răspunsuri generate local cu Ollama și sinteză vocală.**
+**Aplicație cu avatar 3D animat procedural, răspunsuri generate local cu Ollama și sinteză vocală.**
 
 > Scrie un mesaj → Ollama generează răspunsul în streaming → serviciul TTS redă vocea
 > → fața sferică separată articulează cuvintele, iar personajul poate executa comenzi.
 
 ---
 
-## ▶ Pornire rapidă (un singur dublu-click)
+## ▶ Pornire rapidă — fără Unity instalat
 
-**Dublu-click pe `START.bat`** din folderul proiectului.
+**Dublu-click pe `START_DEMO.bat`** din folderul proiectului.
 
-Scriptul:
+Scriptul pornește automat:
 
-1. Verifică și pornește **Ollama** (descarcă modelul `qwen2.5:3b` la prima rulare)
-2. Instalează dependențele Python și pornește **serverul TTS**
-3. Deschide **Unity** cu proiectul
+1. **Ollama** (descarcă modelul `qwen2.5:3b` la prima rulare, ~2 GB)
+2. **Serverul TTS** Python (instalează dependențele la prima rulare)
+3. **Aplicația** `Build\TalkingAvatar3D.exe` direct — fără Unity Editor
 
-Când Unity e deschis: apasă **Play ▶**. Avatarul se prezintă automat în română;
+Când aplicația s-a deschis: avatarul se prezintă automat în română,
 apoi poți alege limba, scrie un mesaj și apăsa Enter.
 
-## Compilare pe GitHub
+> **Nu este nevoie de Unity instalat pentru a rula demo-ul.**
 
-Workflow-ul **Build Windows Player** creează un executabil Windows la fiecare push
-pe `main` sau la pornire manuală din GitHub Actions. Înainte de prima rulare,
-adaugă licența Unity ca repository secret cu numele `UNITY_LICENSE`.
-Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
+---
+
+## ▶ Pornire pentru dezvoltatori (cu Unity)
+
+**Dublu-click pe `START.bat`** — pornește Ollama + TTS + Unity Editor.
+
+Când Unity e deschis: apasă **Play ▶**.
+
+---
+
+## Cerințe software
+
+### Pentru demo (`START_DEMO.bat`)
+
+| Software | Versiune         | Descărcare         |
+| -------- | ---------------- | ------------------ |
+| Ollama   | versiune curentă | https://ollama.com |
+| Python   | 3.10–3.12        | https://python.org |
+
+> La instalarea Python bifează **"Add Python to PATH"**.
+
+### Pentru dezvoltare (`START.bat`)
+
+| Software          | Versiune         | Descărcare                 |
+| ----------------- | ---------------- | -------------------------- |
+| Unity Hub + Unity | **6000.2.3f1**   | https://unity.com/download |
+| Ollama            | versiune curentă | https://ollama.com         |
+| Python            | 3.10–3.12        | https://python.org         |
+
+---
+
+## Opționale (îmbunătățesc calitatea vocii)
+
+| C![alt text](image.png)omponent | Instalare                                                 |
+| ------------------------------- | --------------------------------------------------------- |
+| Voce română Piper (~63 MB)      | dublu-click `Tools\TtsService\install_romanian_voice.bat` |
+| Rhubarb Lip Sync (~84 MB)       | dublu-click `Tools\TtsService\install_rhubarb.bat`        |
+
+Fără Rhubarb, aplicația estimează visemele din text. Fără Piper, româna folosește o voce Windows SAPI.
+
+---
+
+## Instalare manuală (alternativă la scripturile .bat)
+
+```powershell
+# Terminal 1 — pornește Ollama
+ollama pull qwen2.5:3b
+ollama serve
+```
+
+```powershell
+# Terminal 2 — pornește serverul TTS
+cd Tools\TtsService
+py -m pip install -r requirements.txt
+py tts_server.py
+```
+
+Apoi dublu-click pe `Build\TalkingAvatar3D.exe`.
+
+Verifică serviciile înainte de demonstrație:
+
+- Ollama: http://localhost:11434 — trebuie să răspundă „Ollama is running"
+- TTS: http://127.0.0.1:5000/health — trebuie să răspundă cu status `ok`
 
 ---
 
@@ -48,8 +107,8 @@ Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
         ▼
 [ CompanionVisemeFace (Unity C#) ]
    ├── Față sferică independentă, cu ochi și gură animată
-   ├── Estimează visemele din text sau folosește cue-uri Rhubarb, dacă sunt disponibile
-   └── Săgețile repoziționează fața pe ecran fără să miște personajul
+   ├── Estimează visemele din text sau folosește cue-uri Rhubarb
+   └── Săgețile repoziționează fața pe ecran
         │
 [ AvatarVisemeAnimator (Unity C#) ]
    └── Animații procedurale: mers, flotări, salut, sărituri, înot și dans
@@ -57,107 +116,21 @@ Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
 
 ---
 
-Visemele sunt estimate din text (reguli pentru română și engleză) sau, dacă Rhubarb
-Lip Sync este instalat, extrase din audio. Fața sferică folosește forme vizuale pentru
-deschiderea rotundă, zâmbet, buze închise, dinți pe buză, țuguiere și consoane. Fața
-articulează independent de personaj și se repoziționează din butoanele cu săgeți sau
-cu tastele I/J/K/L (I sus, J stânga, K jos, L dreapta). Săgețile tastaturii rămân
-disponibile pentru deplasarea personajului. Personajul principal rămâne liber să execute comenzile.
-Nu sunt necesare blendshapes pe modelul GLB.
+## Ghid de demonstrație
 
----
-
-## Cerințe software
-
-| Software          | Versiune       | Descărcare                 |
-| ----------------- | -------------- | -------------------------- |
-| Unity Hub + Unity | **6000.2.3f1** | https://unity.com/download |
-| Ollama            | versiune curentă | https://ollama.com       |
-| Python            | 3.10–3.12      | https://python.org         |
-
-Proiectul și scripturile de lansare sunt pregătite pentru Windows. Modelul Ollama
-`qwen2.5:3b` se descarcă separat (aproximativ 2 GB) la prima configurare.
-
-### Opționale (îmbunătățesc calitatea)
-
-| Component                  | Instalare                                                 |
-| -------------------------- | --------------------------------------------------------- |
-| Voce română Piper (~63 MB) | dublu-click `Tools\TtsService\install_romanian_voice.bat` |
-| Rhubarb Lip Sync (~84 MB)  | dublu-click `Tools\TtsService\install_rhubarb.bat`        |
-
-Fără Rhubarb, aplicația estimează visemele din text. Fără modelul vocal Piper,
-româna folosește o voce Windows SAPI compatibilă, dacă este instalată. Niciunul
-dintre aceste componente opționale nu este necesar pentru a deschide proiectul Unity.
-
----
-
-## Instalare manuală (alternativă la START.bat)
-
-```powershell
-# Descarcă modelul o singură dată, apoi pornește Ollama într-un terminal
-ollama pull qwen2.5:3b
-ollama serve
-```
-
-Într-o a doua fereastră PowerShell, instalează și pornește serverul TTS:
-
-```powershell
-cd Tools\TtsService
-py -m pip install -r requirements.txt
-py tts_server.py
-```
-
-În Unity Hub, adaugă folderul repository-ului (folderul care conține `Assets`,
-`Packages` și `ProjectSettings`) ca proiect existent, deschide-l cu Unity
-**6000.2.3f1**, deschide `Assets/Scenes/SampleScene.unity` și apasă **Play**.
-După mutarea folderului proiectului, folosește **Add > Add project from disk** și
-selectează noua locație; intrarea veche din lista Unity Hub poate indica încă folderul
-mutat și trebuie eliminată din listă.
-`START.bat` automatizează pornirea serviciilor și Unity pe Windows, dar necesită ca
-Ollama, Python și Unity să fie deja instalate. Scriptul nu instalează Ollama sau Unity.
-
-Verifică serviciile înainte de demonstrație:
-
-- Ollama: http://localhost:11434 — trebuie să răspundă „Ollama is running”.
-- TTS: http://127.0.0.1:5000/health — trebuie să răspundă cu status `ok`.
-
----
-
-## Ghid de rulare și demonstrație
-
-1. Pornește Ollama și serverul TTS, apoi deschide proiectul în Unity **6000.2.3f1**.
-2. Apasă **Play**. Așteaptă confirmarea încărcării avatarului și verifică statusul
-   Ollama din panoul aplicației.
+1. Dublu-click pe `START_DEMO.bat` și așteaptă să pornească aplicația.
+2. Avatarul se prezintă automat. Verifică statusul Ollama și TTS din panoul aplicației.
 3. Alege **Română** sau **English**, introdu o întrebare și apasă **Trimite**.
-   Avatarul răspunde local la întrebări generale și introductive despre proiect,
-   informatică, geografie, știință și cultură generală. Răspunsurile sunt scurte;
-   pentru întrebări avansate poate să nu știe răspunsul.
-4. Demonstrează comenzile de animație: `Fă 5 pași`, `Fă 3 flotări`, `Salut`,
-   `Sari` sau `Dansează`. Comenzile sunt disponibile și prin butoanele de control.
-   Pentru comenzile de animație, avatarul confirmă executarea printr-un mesaj fix;
-   răspunsul nu este generat de Ollama.
-5. Pentru cue-uri Rhubarb extrase din audio, instalează componenta opțională și
-   repornește serverul TTS. Fără Rhubarb, aplicația estimează visemele din text.
+4. Demonstrează comenzile de animație:
 
-### Ce demonstrează proiectul
-
-- Încărcarea unui model GLB într-o scenă Unity și animații procedurale.
-- Integrarea cu Ollama local, generarea răspunsurilor în streaming și interfața chat.
-- Integrarea unui serviciu TTS local pentru engleză și română.
-- Detectarea comenzilor de animație în română și engleză.
-- Estimarea visemelor din text și suport opțional Rhubarb pentru cue-uri din audio.
-
-Fața vorbitoare este creată automat în Play Mode și nu necesită configurare de prefab.
-
----
-
-## Comenzi chat disponibile
-
-| Română          | Engleză         |
-| --------------- | --------------- |
-| `Fă 5 pași`     | `Walk 5 steps`  |
-| `Fă 3 flotări`  | `Do 3 push-ups` |
-| Întrebări generale, simple | Simple general questions |
+| Română             | Engleză          |
+| ------------------ | ---------------- |
+| `Fă 5 pași`        | `Walk 5 steps`   |
+| `Fă 3 flotări`     | `Do 3 push-ups`  |
+| `Salută`           | `Wave`           |
+| `Sari`             | `Jump`           |
+| `Dansează`         | `Dance`          |
+| `Înoată 5 secunde` | `Swim 5 seconds` |
 
 Numărul de repetări: cifre (`5`) sau cuvinte (`cinci`, `five`). Default: 5.
 
@@ -167,51 +140,51 @@ Numărul de repetări: cifre (`5`) sau cuvinte (`cinci`, `five`). Default: 5.
 
 ```
 TalkingAvatar3D/
-├── START.bat                          ← PORNIRE AUTOMATĂ (Ollama + TTS + Unity)
+├── START_DEMO.bat                     ← DEMO (fara Unity — doar dublu-click)
+├── START.bat                          ← DEZVOLTARE (porneste si Unity Editor)
 ├── README.md
+├── Build/                             ← generat de Unity (nu e in repo)
+│   ├── TalkingAvatar3D.exe
+│   └── TalkingAvatar3D_Data/
 ├── Assets/
-│   ├── AvatarVisemeAnimator.cs        ← Lip-sync prin mișcarea capului + animații corp
-│   ├── VisemeTextMapper.cs            ← G2P EN / silabificare RO + Rhubarb parser
+│   ├── AvatarVisemeAnimator.cs        ← Lip-sync + animații corp procedural
+│   ├── CompanionVisemeFace.cs         ← Față sferică cu ochi și gură animată
 │   ├── OllamaStreamTester.cs          ← Client Ollama streaming + queue TTS
 │   ├── TalkingAvatarBootstrap.cs      ← Init scenă + UI OnGUI + health check
-│   ├── model.glb                      ← Sursă model avatar
-│   ├── StreamingAssets/model.glb      ← Model la runtime (încărcat de GLTFast)
+│   ├── UrpMaterialGenerator.cs        ← Generator materiale URP pentru GLTFast
+│   ├── VisemeTextMapper.cs            ← G2P EN / silabificare RO + Rhubarb parser
+│   ├── Resources/
+│   │   └── UrpLitMaterial.mat         ← Material de referință — forțează URP/Lit în build
+│   ├── model.glb                      ← Model avatar
 │   ├── ollama-unity/                  ← Librărie Ollama C#
 │   └── Scenes/SampleScene.unity
-├── Tools/
-│   └── TtsService/
-│       ├── tts_server.py              ← Server TTS (SAPI + Piper)
-│       ├── requirements.txt
-│       ├── start_tts.bat
-│       ├── install_romanian_voice.bat
-│       └── install_rhubarb.bat
-├── Packages/manifest.json             ← GLTFast, URP, Input System...
-└── ProjectSettings/
+└── Tools/
+    └── TtsService/
+        ├── tts_server.py              ← Server TTS (SAPI + Piper)
+        ├── requirements.txt
+        ├── install_romanian_voice.bat
+        └── install_rhubarb.bat
 ```
 
 ---
 
-## Funcționalități implementate
+## Compilare pe GitHub Actions
 
-### Cerințe principale ✅
+Workflow-ul **Build Windows Player** creează executabilul Windows la fiecare push
+pe `main` sau la pornire manuală. Adaugă licența Unity ca repository secret cu
+numele `UNITY_LICENSE`. Build-ul reușit apare ca artifact `TalkingAvatar3D-Windows`.
 
-- Generare text **streaming** de la Ollama (token cu token, latență minimă)
-- **Prompturi de sistem** per limbă (română cu diacritice / engleză naturală)
-- **TTS local** și suport opțional pentru cue-uri Rhubarb extrase din audio
-- **Estimare de viseme** din text pentru română și engleză
-- **Animație procedurală** a avatarului și mișcare subtilă de cap sincronizată cu vorbirea
-- **Format GLB** încărcat asincron via GLTFast (modelul inclus nu are blendshapes)
-- **G2P pentru engleză**: tabel 150+ cuvinte neregulate + reguli grafemice (ph→f, gh mut, kn→n, vocale finale mute etc.)
-- **Silabificare pentru română**: segmentare V/CV/CCV, buffer onset/coda, digrame ch/gh
+---
 
-### Cerințe opționale ✅
+## Ce demonstrează proiectul
 
-- **Mers pe loc** procedural cu oase (LeftUpLeg/RightUpLeg/LeftArm/RightArm)
-- **Flotări** procedurale cu tranziție și revenire la poza inițială
-- **Detecție comenzi** bilingv cu număr de repetări (cifre + cuvinte)
-- **Mișcare cap/corp** subtilă în timpul vorbirii (respirație)
-- **UI OnGUI** cu istoric chat, selector limbă, status servicii în timp real
-- **Health check** Ollama la pornire (afișează avertisment dacă nu rulează)
+- Încărcarea unui model GLB într-o scenă Unity și animații procedurale
+- Integrarea cu Ollama local, generarea răspunsurilor în streaming și interfața chat
+- Serviciu TTS local pentru engleză (SAPI) și română (Piper)
+- Detectarea comenzilor de animație bilingv (română + engleză)
+- Estimarea visemelor din text și suport opțional Rhubarb pentru cue-uri din audio
+- G2P pentru engleză: tabel 150+ cuvinte neregulate + reguli grafemice
+- Silabificare pentru română: segmentare V/CV/CCV, buffer onset/coda, digrame ch/gh
 
 ---
 

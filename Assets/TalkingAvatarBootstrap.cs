@@ -69,7 +69,7 @@ public class TalkingAvatarBootstrap : MonoBehaviour
     {
         string modelPath = Path.Combine(Application.streamingAssetsPath, modelFileName);
         string modelUri  = modelPath.Contains("://") ? modelPath : new Uri(modelPath).AbsoluteUri;
-        GltfImport gltf  = new GltfImport();
+        GltfImport gltf  = new GltfImport(materialGenerator: new UrpMaterialGenerator());
         bool keepImportAlive = false;
 
         try
@@ -94,6 +94,8 @@ public class TalkingAvatarBootstrap : MonoBehaviour
             if (transform.childCount > childCountBeforeInstantiation)
                 avatarAnimator.SetAvatarRoot(transform.GetChild(childCountBeforeInstantiation));
 
+            FixMagentaMaterials(transform);
+
             avatarAnimator.RefreshBlendShapes();
             avatarImport     = gltf;
             keepImportAlive  = true;
@@ -117,6 +119,65 @@ public class TalkingAvatarBootstrap : MonoBehaviour
         avatarImport.Dispose();
         avatarImport = null;
     }
+
+    /// <summary>
+    /// Înlocuiește materialele magenta (eroare shader) de pe avatarul GLB cu un material URP valid.
+    /// GLTFast folosește shader graphs proprii care pot lipsi din build dacă nu sunt referite explicit.
+    /// Această metodă garantează că avatarul are culori corecte indiferent de shaderele disponibile.
+    /// </summary>
+    private static void FixMagentaMaterials(Transform root)
+    {
+        // Găsim shader-ul URP Lit — garantat în build prin AlwaysIncludedShaders
+        Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+        if (urpLit == null) urpLit = Shader.Find("Universal Render Pipeline/Unlit");
+        if (urpLit == null)
+        {
+            Debug.LogWarning("[Bootstrap] URP Lit shader nu e disponibil în build.");
+            return;
+        }
+
+        foreach (Renderer rend in root.GetComponentsInChildren<Renderer>(true))
+        {
+            Material[] mats = rend.sharedMaterials;
+            bool changed = false;
+            for (int i = 0; i < mats.Length; i++)
+            {
+                Material src = mats[i];
+                if (src == null) { changed = true; mats[i] = new Material(urpLit); continue; }
+
+                string sName = src.shader != null ? src.shader.name : "NULL";
+                Debug.Log($"[FixMaterials] {rend.name}[{i}] shader={sName}");
+
+                // Dacă shader-ul e URP nativ — nu atingem materialul
+                if (sName.StartsWith("Universal Render Pipeline")) continue;
+
+                // Orice alt shader (GLTFast ShaderGraph, Hidden, etc.) — înlocuim
+                Material mat = new Material(urpLit);
+
+                // Copiem culoarea de bază
+                if (src.HasProperty("baseColorFactor"))
+                    mat.SetColor("_BaseColor", src.GetColor("baseColorFactor"));
+                else if (src.HasProperty("_BaseColor"))
+                    mat.SetColor("_BaseColor", src.GetColor("_BaseColor"));
+                else if (src.HasProperty("_Color"))
+                    mat.SetColor("_BaseColor", src.GetColor("_Color"));
+
+                // Copiem textura dacă există
+                if (src.HasProperty("baseColorTexture") && src.GetTexture("baseColorTexture") != null)
+                    mat.SetTexture("_BaseMap", src.GetTexture("baseColorTexture"));
+                else if (src.HasProperty("_MainTex") && src.GetTexture("_MainTex") != null)
+                    mat.SetTexture("_BaseMap", src.GetTexture("_MainTex"));
+                else if (src.HasProperty("_BaseMap") && src.GetTexture("_BaseMap") != null)
+                    mat.SetTexture("_BaseMap", src.GetTexture("_BaseMap"));
+
+                mats[i] = mat;
+                changed = true;
+            }
+            if (changed)
+                rend.sharedMaterials = mats;
+        }
+    }
+
 
     /// <summary>Verifică dacă Ollama este pornit și actualizează statusul în UI.</summary>
     private async void CheckOllamaAsync()
