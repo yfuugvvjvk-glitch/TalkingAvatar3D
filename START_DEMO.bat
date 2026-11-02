@@ -12,17 +12,8 @@ set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 set "PROJECT_DIR=%~dp0"
 set "TTS_DIR=%~dp0Tools\TtsService"
 
-REM Cauta exe-ul in Build\ sau direct langa bat
-if exist "%~dp0Build\Latest\TalkingAvatar3D.exe" (
-    set "BUILD_EXE=%~dp0Build\Latest\TalkingAvatar3D.exe"
-    goto :build_selected
-)
-
-if exist "%~dp0Build\TalkingAvatar3D.exe" (
-    set "BUILD_EXE=%~dp0Build\TalkingAvatar3D.exe"
-) else (
-    set "BUILD_EXE=%~dp0TalkingAvatar3D.exe"
-)
+REM Alege build-ul al carui assembly de gameplay a fost compilat cel mai recent.
+for /f "usebackq delims=" %%I in (`powershell.exe -NoProfile -Command "$candidates = @((Join-Path $env:PROJECT_DIR 'Build\TalkingAvatar3D.exe'), (Join-Path $env:PROJECT_DIR 'Build\Latest\TalkingAvatar3D.exe'), (Join-Path $env:PROJECT_DIR 'TalkingAvatar3D.exe')); $candidates | Where-Object { Test-Path -LiteralPath $_ } | Sort-Object -Property { $assembly = Join-Path (Split-Path $_) 'TalkingAvatar3D_Data\Managed\Assembly-CSharp.dll'; if (Test-Path -LiteralPath $assembly) { (Get-Item -LiteralPath $assembly).LastWriteTimeUtc } else { (Get-Item -LiteralPath $_).LastWriteTimeUtc } } -Descending | Select-Object -First 1"`) do set "BUILD_EXE=%%I"
 
 :build_selected
 REM ============================================================
