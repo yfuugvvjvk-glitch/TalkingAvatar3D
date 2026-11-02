@@ -9,11 +9,6 @@ using System.Text.RegularExpressions;
 
 public class OllamaStreamTester : MonoBehaviour
 {
-    private const string ProjectIntroduction =
-        "Bună! Mă numesc Petrescu Cristian, sunt student în anul al treilea la Informatică, iar acesta este proiectul meu. " +
-        "Avatarul poate să meargă, să facă flotări, să salute, să ridice brațele, să sară, să înoate, să danseze și să rotească capul. " +
-        "Pot să execut aceste mișcări și să răspund la întrebări simple.";
-
     [Header("Setări Ollama")]
     public string modelName = "qwen2.5:3b";
 
@@ -29,57 +24,51 @@ public class OllamaStreamTester : MonoBehaviour
     public TMP_Text       chatDisplay;
     public AudioSource    audioSource;
     public AvatarVisemeAnimator avatarAnimator;
+    public AnimatedJawHead jawHead;
     public CompanionVisemeFace companionFace;
 
     // ─── Stare internă ───────────────────────────────────────────────────────
     private readonly object        streamLock   = new object();
-    private readonly Queue<string> speechQueue  = new Queue<string>();
+    private readonly Queue<SpeechItem> speechQueue = new Queue<SpeechItem>();
     private readonly StringBuilder speechBuffer = new StringBuilder();
     private string currentStreamedText = "";
     private bool   isStreaming;
     private bool   chatInitialized;
     private bool   standaloneSpeechActive;
-    private bool   commandInProgress;
-    private Func<bool> pendingCommandAction;
 
     private Coroutine ttsCoroutine;
 
     public string SpeechStatus     { get; private set; } = "TTS: în așteptare";
     public string AvatarActionStatus => avatarAnimator != null ? avatarAnimator.ActionStatus : string.Empty;
-    public bool   IsCommandInProgress => commandInProgress;
-    public bool   IsStreaming        => isStreaming || commandInProgress || ttsCoroutine != null;
+    public bool   IsCommandInProgress => avatarAnimator != null && avatarAnimator.IsPerformingAction;
+    public bool   IsStreaming        => isStreaming || ttsCoroutine != null;
     public string CurrentChatText
     {
         get { lock (streamLock) return currentStreamedText; }
     }
 
-    public void PresentProject()
+    public bool CanSubmitPrompt(string prompt)
     {
-        lock (streamLock)
-        {
-            currentStreamedText += $"\nAI: {ProjectIntroduction}\n";
-            if (chatDisplay != null) chatDisplay.text = currentStreamedText;
-        }
-        QueueStandaloneSpeech(ProjectIntroduction);
+        return !IsStreaming && (avatarAnimator == null || !avatarAnimator.IsPerformingAction);
     }
 
     public void ReportAvatarCommand(string command, string actionDescription, Func<bool> startAction)
     {
-        if (IsStreaming) return;
-        commandInProgress = true;
-        AvatarVisemeAnimator.InputBlocked = true;
-        bool speakWithAction = CanSpeak;
-        bool executed = speakWithAction ? startAction != null : startAction != null && startAction();
-        if (speakWithAction) pendingCommandAction = startAction;
-        string response = GetCommandResponse(executed, actionDescription);
+        QueueAvatarCommand(command, actionDescription, startAction);
+    }
+
+    public void QueueAutomaticIntroduction(string introduction)
+    {
+        if (string.IsNullOrWhiteSpace(introduction)) return;
+
         lock (streamLock)
         {
-            currentStreamedText += $"\nTu: {command}\nAI: {response}\n";
-            if (CanSpeak) speechQueue.Enqueue(response);
+            currentStreamedText += $"\nAI: {introduction}\n";
+            if (CanSpeak) EnqueueSpeech(introduction);
             if (chatDisplay != null) chatDisplay.text = currentStreamedText;
         }
-        StartStandaloneTtsWorker();
-        StartCoroutine(WaitForCommandCompletion());
+
+        if (CanSpeak) StartStandaloneTtsWorker();
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -90,16 +79,23 @@ public class OllamaStreamTester : MonoBehaviour
     {
         if (inputField == null) return;
         string p = inputField.text.Trim();
+        if (string.IsNullOrEmpty(p) || !CanSubmitPrompt(p)) return;
         inputField.text = "";
-        if (!string.IsNullOrEmpty(p)) SendPrompt(p);
+        SendPrompt(p);
     }
 
     public async void SendPrompt(string prompt)
     {
-        if (IsStreaming || string.IsNullOrWhiteSpace(prompt)) return;
+        if (string.IsNullOrWhiteSpace(prompt) || !CanSubmitPrompt(prompt)) return;
 
         bool commandRecognized = TryStartAvatarAction(prompt, out string actionDescription,
             out Func<bool> startAction);
+        if (commandRecognized)
+        {
+            QueueAvatarCommand(prompt, actionDescription, startAction);
+            return;
+        }
+        if (IsStreaming) return;
 
         lock (streamLock)
         {
@@ -115,7 +111,6 @@ public class OllamaStreamTester : MonoBehaviour
         }
 
         isStreaming = true;
-        AvatarVisemeAnimator.InputBlocked = true;
 
         if (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint))
         {
@@ -138,26 +133,6 @@ public class OllamaStreamTester : MonoBehaviour
 
         try
         {
-            if (commandRecognized)
-            {
-                commandInProgress = true;
-                AvatarVisemeAnimator.InputBlocked = true;
-                bool speakWithAction = CanSpeak;
-                bool actionExecuted = speakWithAction
-                    ? startAction != null
-                    : startAction != null && startAction();
-                if (speakWithAction) pendingCommandAction = startAction;
-                string response = GetCommandResponse(actionExecuted, actionDescription);
-                lock (streamLock)
-                {
-                    currentStreamedText += response;
-                    if (CanSpeak) speechQueue.Enqueue(response);
-                    if (chatDisplay != null) chatDisplay.text = currentStreamedText;
-                }
-                StartCoroutine(WaitForCommandCompletion());
-                return;
-            }
-
             if (!chatInitialized)
             {
                 ollama.Ollama.InitChat(8, BuildSystemPrompt());
@@ -173,6 +148,12 @@ public class OllamaStreamTester : MonoBehaviour
         catch (Exception ex)
         {
             Debug.LogException(ex);
+            lock (streamLock)
+            {
+                currentStreamedText += $"\n\nEroare la Ollama: {ex.Message}\n";
+                if (chatDisplay != null)
+                    chatDisplay.text = currentStreamedText;
+            }
         }
         finally
         {
@@ -181,7 +162,7 @@ public class OllamaStreamTester : MonoBehaviour
                 string tail = speechBuffer.ToString().Trim();
                 speechBuffer.Length = 0;
                 if (speakResponses && !string.IsNullOrWhiteSpace(tail))
-                    speechQueue.Enqueue(tail);
+                    EnqueueSpeech(tail);
 
                 if (chatDisplay != null)
                     chatDisplay.text = currentStreamedText;
@@ -196,29 +177,48 @@ public class OllamaStreamTester : MonoBehaviour
         return $"Acum {actionDescription}.";
     }
 
-    private IEnumerator WaitForCommandCompletion()
+    private void QueueAvatarCommand(string command, string actionDescription, Func<bool> startAction)
     {
-        while (avatarAnimator != null && avatarAnimator.IsPerformingAction)
-            yield return null;
+        if (IsStreaming || (avatarAnimator != null && avatarAnimator.IsPerformingAction))
+            return;
 
-        while ((ttsCoroutine != null || audioSource != null && audioSource.isPlaying) &&
-               (speakResponses && audioSource != null && !string.IsNullOrWhiteSpace(ttsEndpoint)))
-            yield return null;
+        if (CanSpeak)
+        {
+            string response = GetCommandResponse(true, actionDescription);
+            lock (streamLock)
+            {
+                currentStreamedText += $"\nTu: {command}\nAI: {response}\n";
+                EnqueueSpeech(response, () =>
+                {
+                    if (startAction == null || !startAction())
+                        AppendCommandFailure();
+                });
+                if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+            }
+            StartStandaloneTtsWorker();
+            return;
+        }
 
-        commandInProgress = false;
+        bool executed = startAction != null && startAction();
+        lock (streamLock)
+        {
+            currentStreamedText += $"\nTu: {command}\nAI: {GetCommandResponse(executed, actionDescription)}\n";
+            if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+        }
+    }
+
+    private void AppendCommandFailure()
+    {
+        lock (streamLock)
+        {
+            currentStreamedText += "Comanda nu a putut fi executată.\n";
+            if (chatDisplay != null) chatDisplay.text = currentStreamedText;
+        }
+        Debug.LogWarning("Comanda avatarului nu a putut porni după confirmarea vocală.");
     }
 
     private bool CanSpeak => speakResponses && audioSource != null &&
                              !string.IsNullOrWhiteSpace(ttsEndpoint);
-
-    private void QueueStandaloneSpeech(string phrase)
-    {
-        if (!speakResponses || audioSource == null || string.IsNullOrWhiteSpace(ttsEndpoint))
-            return;
-
-        lock (streamLock) speechQueue.Enqueue(phrase);
-        StartStandaloneTtsWorker();
-    }
 
     private void StartStandaloneTtsWorker()
     {
@@ -232,6 +232,26 @@ public class OllamaStreamTester : MonoBehaviour
             standaloneSpeechActive = true;
         }
         ttsCoroutine = StartCoroutine(TtsWorker());
+    }
+
+    private void EnqueueSpeech(string phrase, Action afterPlayback = null)
+    {
+        if (!string.IsNullOrWhiteSpace(phrase))
+            speechQueue.Enqueue(new SpeechItem(phrase, afterPlayback));
+        else
+            afterPlayback?.Invoke();
+    }
+
+    private sealed class SpeechItem
+    {
+        public readonly string Phrase;
+        public readonly Action AfterPlayback;
+
+        public SpeechItem(string phrase, Action afterPlayback)
+        {
+            Phrase = phrase;
+            AfterPlayback = afterPlayback;
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -260,7 +280,7 @@ public class OllamaStreamTester : MonoBehaviour
             string sentence = speechBuffer.ToString(0, sentenceEnd + 1).Trim();
             speechBuffer.Remove(0, sentenceEnd + 1);
             if (!string.IsNullOrWhiteSpace(sentence))
-                speechQueue.Enqueue(sentence);
+                EnqueueSpeech(sentence);
         }
 
         if (speechBuffer.Length >= 100)
@@ -271,7 +291,7 @@ public class OllamaStreamTester : MonoBehaviour
                 string chunk = speechBuffer.ToString(0, cut).Trim();
                 speechBuffer.Remove(0, cut + 1);
                 if (!string.IsNullOrWhiteSpace(chunk))
-                    speechQueue.Enqueue(chunk);
+                    EnqueueSpeech(chunk);
             }
         }
     }
@@ -292,14 +312,14 @@ public class OllamaStreamTester : MonoBehaviour
     {
         while (true)
         {
-            string phrase = null;
+            SpeechItem item = null;
             lock (streamLock)
             {
                 if (speechQueue.Count > 0)
-                    phrase = speechQueue.Dequeue();
+                    item = speechQueue.Dequeue();
             }
 
-            if (phrase == null)
+            if (item == null)
             {
                 if (standaloneSpeechActive)
                 {
@@ -317,16 +337,17 @@ public class OllamaStreamTester : MonoBehaviour
                 continue;
             }
 
-            yield return SendToTts(phrase);
+            yield return SendToTts(item);
         }
     }
 
-    private IEnumerator SendToTts(string phrase)
+    private IEnumerator SendToTts(SpeechItem item)
     {
+        SpeechStatus = "TTS: se generează vocea...";
         var request = new SpeechRequest
         {
             model           = ttsModel,
-            input           = phrase,
+            input           = item.Phrase,
             voice           = ttsVoice,
             language        = speechLanguage,
             response_format = "wav"
@@ -336,6 +357,7 @@ public class OllamaStreamTester : MonoBehaviour
 
         using (var webReq = new UnityWebRequest(ttsEndpoint, UnityWebRequest.kHttpVerbPOST))
         {
+            webReq.timeout = 60;
             webReq.uploadHandler   = new UploadHandlerRaw(body);
             webReq.downloadHandler = new DownloadHandlerAudioClip(ttsEndpoint, AudioType.WAV);
             webReq.SetRequestHeader("Content-Type", "application/json");
@@ -352,7 +374,7 @@ public class OllamaStreamTester : MonoBehaviour
                 string msg = errObj?.error ?? webReq.error;
                 SpeechStatus = $"TTS eroare ({webReq.responseCode}): {msg}";
                 Debug.LogError(SpeechStatus);
-                StartPendingCommandAction();
+                item.AfterPlayback?.Invoke();
                 yield break;
             }
 
@@ -361,7 +383,7 @@ public class OllamaStreamTester : MonoBehaviour
             {
                 SpeechStatus = "TTS: WAV invalid.";
                 Debug.LogError(SpeechStatus);
-                StartPendingCommandAction();
+                item.AfterPlayback?.Invoke();
                 yield break;
             }
 
@@ -381,30 +403,25 @@ public class OllamaStreamTester : MonoBehaviour
                 : $"TTS: {ttsEngine} + estimare fonematică";
 
             if (avatarAnimator != null)
-                avatarAnimator.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
+                avatarAnimator.PlaySpeech(item.Phrase, clip.length, speechLanguage, timelineJson);
+            if (jawHead != null)
+                jawHead.PlaySpeech(item.Phrase, clip.length, speechLanguage, timelineJson);
             if (companionFace != null)
-                companionFace.PlaySpeech(phrase, clip.length, speechLanguage, timelineJson);
+                companionFace.PlaySpeech(item.Phrase, clip.length, speechLanguage, timelineJson);
 
-            StartPendingCommandAction();
             audioSource.clip = clip;
             audioSource.Play();
 
             while (audioSource.isPlaying)
                 yield return null;
+
+            item.AfterPlayback?.Invoke();
         }
     }
 
     // ════════════════════════════════════════════════════════════════════════
     // Detecție comenzi de animație
     // ════════════════════════════════════════════════════════════════════════
-
-    private void StartPendingCommandAction()
-    {
-        Func<bool> startAction = pendingCommandAction;
-        pendingCommandAction = null;
-        if (startAction != null && !startAction())
-            Debug.LogWarning("Comanda avatarului nu a putut porni la sincronizarea cu vocea.");
-    }
 
     private bool TryStartAvatarAction(string prompt, out string actionDescription,
         out Func<bool> startAction)

@@ -6,8 +6,9 @@ import shutil
 import subprocess
 import tempfile
 import wave
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 
 import pyttsx3
 from piper import PiperVoice
@@ -107,7 +108,7 @@ def generate_visemes(executable, audio_path, text, language):
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=120,
+            timeout=15,
             check=False,
         )
         if result.returncode != 0:
@@ -124,6 +125,7 @@ def generate_visemes(executable, audio_path, text, language):
 
 class TtsHandler(BaseHTTPRequestHandler):
     piper_voice = None
+    synthesis_lock = Lock()
 
     def send_json_error(self, status, message):
         body = json.dumps({"error": message}).encode("utf-8")
@@ -138,13 +140,9 @@ class TtsHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Use /health or POST /v1/audio/speech")
             return
 
-        engine = pyttsx3.init("sapi5")
-        voices = [voice.name for voice in engine.getProperty("voices")]
-        engine.stop()
         body = json.dumps(
             {
                 "status": "ok",
-                "sapi_voices": voices,
                 "romanian_piper_voice": ROMANIAN_VOICE_MODEL.is_file(),
                 "rhubarb": find_rhubarb() is not None,
             }
@@ -160,6 +158,16 @@ class TtsHandler(BaseHTTPRequestHandler):
             self.send_json_error(404, "Use POST /v1/audio/speech")
             return
 
+        if not self.synthesis_lock.acquire(blocking=False):
+            self.send_json_error(503, "Speech synthesis is already in progress")
+            return
+
+        try:
+            self.handle_speech_request()
+        finally:
+            self.synthesis_lock.release()
+
+    def handle_speech_request(self):
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
             if content_length <= 0 or content_length > 1_000_000:
@@ -250,6 +258,10 @@ class TtsHandler(BaseHTTPRequestHandler):
         print(f"[TTS] {self.address_string()} - {format_string % args}")
 
 
+class SingleInstanceThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+
 if __name__ == "__main__":
     print(f"Local Windows TTS listening on http://{HOST}:{PORT}")
     print(f"Health check: http://{HOST}:{PORT}/health")
@@ -257,4 +269,4 @@ if __name__ == "__main__":
         print("Loading Romanian Piper voice...")
         TtsHandler.piper_voice = PiperVoice.load(str(ROMANIAN_VOICE_MODEL))
         print("Romanian Piper voice ready.")
-    HTTPServer((HOST, PORT), TtsHandler).serve_forever()
+    SingleInstanceThreadingHTTPServer((HOST, PORT), TtsHandler).serve_forever()

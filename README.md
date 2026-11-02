@@ -3,7 +3,7 @@
 **Aplicație cu avatar 3D animat procedural, răspunsuri generate local cu Ollama și sinteză vocală.**
 
 > Scrie un mesaj → Ollama generează răspunsul în streaming → serviciul TTS redă vocea
-> → fața sferică separată articulează cuvintele, iar personajul poate executa comenzi.
+> → o mască facială din două piese se atașează la capul avatarului și articulează cuvintele.
 
 ---
 
@@ -31,7 +31,9 @@ TalkingAvatar3D-Windows/
 
 **Pasul 3 — Dublu-click pe `START_DEMO.bat`**
 
-Pornește automat Ollama + TTS + aplicația. Gata.
+Pornește Ollama și TTS dacă sunt disponibile, apoi lansează aplicația. Lipsa unui
+serviciu nu blochează comenzile locale ale avatarului; chatul și vocea afișează
+erorile separat. Scriptul nu descarcă automat modele Ollama de mai mulți GB.
 
 > **Nu este nevoie de Unity instalat.**
 
@@ -42,6 +44,8 @@ Pornește automat Ollama + TTS + aplicația. Gata.
 **Dublu-click pe `START.bat`** — pornește Ollama + TTS + Unity Editor.
 
 Când Unity e deschis: apasă **Play ▶**.
+Pentru actualizarea aplicației folosite de `START_DEMO.bat`, alege
+**Tools → Build Talking Avatar Player**; build-ul nou ajunge în `Build/Latest/`.
 
 ---
 
@@ -118,12 +122,17 @@ Verifică serviciile înainte de demonstrație:
 [ Rhubarb Lip Sync ]  ──► cue-uri timed A-H per cadru audio
         │ (fallback: VisemeTextMapper G2P/silabic RO/EN)
         ▼
+[ AnimatedJawHead (Unity C#) ]
+   ├── Atașează head_top.obj + head_jaw.obj pe osul Head, folosind coordonatele scenei Blender
+   ├── Animează buzele, deschiderea gurii, dinții și mandibula după fiecare visemă
+   └── Folosește nivelul și înălțimea vocii pentru accente subtile de intensitate și intonație
+        │
 [ CompanionVisemeFace (Unity C#) ]
-   ├── Față sferică independentă, cu ochi și gură animată
-   ├── Estimează visemele din text sau folosește cue-uri Rhubarb
-   └── Săgețile repoziționează fața pe ecran
+   ├── Față sferică separată, afișată lângă avatar și sincronizată cu același audio
+   └── I/J/K/L mută fața fără să schimbe comenzile avatarului
         │
 [ AvatarVisemeAnimator (Unity C#) ]
+   ├── Animează blendshape-urile personajului după același timeline audio
    └── Animații procedurale: mers, flotări, salut, sărituri, înot și dans
 ```
 
@@ -132,9 +141,13 @@ Verifică serviciile înainte de demonstrație:
 ## Ghid de demonstrație
 
 1. Dublu-click pe `START_DEMO.bat` și așteaptă să pornească aplicația.
-2. Avatarul se prezintă automat. Verifică statusul Ollama și TTS din panoul aplicației.
+2. Avatarul așteaptă mesajul sau comanda ta; nu pornește o prezentare automată.
+   Comenzile de animație rămân disponibile în timp ce Ollama sau TTS răspund.
+   Pentru comenzile vocale, confirmarea este redată înaintea mișcării; dacă vocea
+   nu poate fi generată, mișcarea pornește fără să aștepte.
 3. Alege **Română** sau **English**, introdu o întrebare și apasă **Trimite**.
-4. Demonstrează comenzile de animație:
+4. Mută fața sferică independent cu tastele **I/J/K/L**; tastele de mișcare ale personajului rămân separate.
+5. Demonstrează comenzile de animație:
 
 | Română             | Engleză          |
 | ------------------ | ---------------- |
@@ -161,7 +174,9 @@ TalkingAvatar3D/
 │   └── TalkingAvatar3D_Data/
 ├── Assets/
 │   ├── AvatarVisemeAnimator.cs        ← Lip-sync + animații corp procedural
-│   ├── CompanionVisemeFace.cs         ← Față sferică cu ochi și gură animată
+│   ├── AnimatedJawHead.cs             ← Mască din două piese, atașată și animată pe osul Head
+│   ├── CompanionVisemeFace.cs         ← Față sferică separată, controlată cu I/J/K/L
+│   ├── split_face.py                  ← Regenerează masca din obiectul Plane din scena Blender
 │   ├── OllamaStreamTester.cs          ← Client Ollama streaming + queue TTS
 │   ├── TalkingAvatarBootstrap.cs      ← Init scenă + UI OnGUI + health check
 │   ├── UrpMaterialGenerator.cs        ← Generator materiale URP pentru GLTFast
@@ -169,6 +184,9 @@ TalkingAvatar3D/
 │   ├── Resources/
 │   │   └── UrpLitMaterial.mat         ← Material de referință — forțează URP/Lit în build
 │   ├── model.glb                      ← Model avatar
+│   ├── StreamingAssets/
+│   │   ├── head_top.obj               ← Partea superioară a măștii
+│   │   └── head_jaw.obj               ← Mandibulă animată
 │   ├── ollama-unity/                  ← Librărie Ollama C#
 │   └── Scenes/SampleScene.unity
 └── Tools/
@@ -178,6 +196,10 @@ TalkingAvatar3D/
         ├── install_romanian_voice.bat
         └── install_rhubarb.bat
 ```
+
+Pentru regenerarea măștii, deschide `.kiro/settings/Untitled.blend` în Blender și rulează
+`Assets/split_face.py`. Scriptul taie obiectul `Plane` la nivelul gurii și exportă piesele
+aliniate cu avatarul în `Assets/StreamingAssets/`.
 
 ---
 
@@ -199,6 +221,7 @@ cu numele `UNITY_LICENSE`. Fără acest secret, build-ul va eșua cu eroare.
 - Serviciu TTS local pentru engleză (SAPI) și română (Piper)
 - Detectarea comenzilor de animație bilingv (română + engleză)
 - Estimarea visemelor din text și suport opțional Rhubarb pentru cue-uri din audio
+- Buze articulate pe masca avatarului după cue-urile audio; fallback-ul folosește foneme și silabe RO/EN
 - G2P pentru engleză: tabel 150+ cuvinte neregulate + reguli grafemice
 - Silabificare pentru română: segmentare V/CV/CCV, buffer onset/coda, digrame ch/gh
 

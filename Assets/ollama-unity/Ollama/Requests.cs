@@ -12,6 +12,8 @@ namespace ollama
     public static partial class Ollama
     {
         private const string SERVER = "http://localhost:11434/";
+        private const int RequestTimeoutMilliseconds = 30000;
+        private const int ReadWriteTimeoutMilliseconds = 60000;
 
         private static class Endpoints
         {
@@ -21,24 +23,68 @@ namespace ollama
             public const string EMBEDDINGS = "api/embed";
         }
 
+        private static HttpWebRequest CreateRequest(string url, string method)
+        {
+            var request = (HttpWebRequest)WebRequest.Create(url);
+            request.ContentType = "application/json";
+            request.Method = method;
+            request.Timeout = RequestTimeoutMilliseconds;
+            request.ReadWriteTimeout = ReadWriteTimeoutMilliseconds;
+            return request;
+        }
+
+        private static async Task<T> WaitForRequestAsync<T>(
+            Task<T> requestTask, HttpWebRequest request, int timeoutMilliseconds, string operation)
+        {
+            Task completed = await Task.WhenAny(requestTask, Task.Delay(timeoutMilliseconds))
+                .ConfigureAwait(false);
+            if (completed != requestTask)
+            {
+                request.Abort();
+                throw new TimeoutException(
+                    $"Ollama {operation} did not respond within {timeoutMilliseconds / 1000} seconds.");
+            }
+
+            return await requestTask.ConfigureAwait(false);
+        }
+
+        private static async Task WaitForRequestAsync(
+            Task requestTask, HttpWebRequest request, int timeoutMilliseconds, string operation)
+        {
+            Task completed = await Task.WhenAny(requestTask, Task.Delay(timeoutMilliseconds))
+                .ConfigureAwait(false);
+            if (completed != requestTask)
+            {
+                request.Abort();
+                throw new TimeoutException(
+                    $"Ollama {operation} did not respond within {timeoutMilliseconds / 1000} seconds.");
+            }
+
+            await requestTask.ConfigureAwait(false);
+        }
+
         private static async Task<T> PostRequest<T>(string payload, string endpoint) where T : Response.Base
         {
             HttpWebRequest httpWebRequest;
 
             try
             {
-                httpWebRequest = (HttpWebRequest)WebRequest.Create($"{SERVER}{endpoint}");
-                httpWebRequest.ContentType = "application/json";
-                httpWebRequest.Method = "POST";
+                httpWebRequest = CreateRequest($"{SERVER}{endpoint}", "POST");
 
-                using (var streamWriter = new StreamWriter(await httpWebRequest.GetRequestStreamAsync().ConfigureAwait(false)))
-                    await streamWriter.WriteAsync(payload).ConfigureAwait(false);
+                using (var streamWriter = new StreamWriter(await WaitForRequestAsync(
+                           httpWebRequest.GetRequestStreamAsync(), httpWebRequest,
+                           RequestTimeoutMilliseconds, "request stream").ConfigureAwait(false)))
+                    await WaitForRequestAsync(streamWriter.WriteAsync(payload), httpWebRequest,
+                        RequestTimeoutMilliseconds, "request write").ConfigureAwait(false);
 
                 string result;
 
-                using (var httpResponse = await httpWebRequest.GetResponseAsync().ConfigureAwait(false))
+                using (var httpResponse = await WaitForRequestAsync(
+                           httpWebRequest.GetResponseAsync(), httpWebRequest,
+                           RequestTimeoutMilliseconds, "response").ConfigureAwait(false))
                 using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
-                    result = await streamReader.ReadToEndAsync().ConfigureAwait(false);
+                    result = await WaitForRequestAsync(streamReader.ReadToEndAsync(), httpWebRequest,
+                        ReadWriteTimeoutMilliseconds, "response body").ConfigureAwait(false);
 
                 return JsonConvert.DeserializeObject<T>(result);
             }
@@ -69,24 +115,33 @@ namespace ollama
 
             try
             {
-                httpWebRequest = (HttpWebRequest)WebRequest.Create($"{SERVER}{endpoint}");
-                httpWebRequest.ContentType = "application/json";
-                httpWebRequest.Method = "POST";
+                httpWebRequest = CreateRequest($"{SERVER}{endpoint}", "POST");
 
-                using (var streamWriter = new StreamWriter(await httpWebRequest.GetRequestStreamAsync().ConfigureAwait(false)))
-                    await streamWriter.WriteAsync(payload).ConfigureAwait(false);
+                using (var streamWriter = new StreamWriter(await WaitForRequestAsync(
+                           httpWebRequest.GetRequestStreamAsync(), httpWebRequest,
+                           RequestTimeoutMilliseconds, "request stream").ConfigureAwait(false)))
+                    await WaitForRequestAsync(streamWriter.WriteAsync(payload), httpWebRequest,
+                        RequestTimeoutMilliseconds, "request write").ConfigureAwait(false);
 
                 bool isEnd = false;
                 int it = 0;
 
-                using (var httpResponse = await httpWebRequest.GetResponseAsync().ConfigureAwait(false))
+                using (var httpResponse = await WaitForRequestAsync(
+                           httpWebRequest.GetResponseAsync(), httpWebRequest,
+                           RequestTimeoutMilliseconds, "response").ConfigureAwait(false))
                 using (var responseStream = httpResponse.GetResponseStream())
                 using (var reader = new StreamReader(responseStream, Encoding.UTF8))
                     while (!isEnd)
                     {
                         it++;
-                        string result = await reader.ReadLineAsync().ConfigureAwait(false);
+                        string result = await WaitForRequestAsync(reader.ReadLineAsync(),
+                            httpWebRequest, ReadWriteTimeoutMilliseconds, "stream data")
+                            .ConfigureAwait(false);
+                        if (result == null)
+                            throw new EndOfStreamException("Ollama closed the response before the stream was complete.");
                         var response = JsonConvert.DeserializeObject<T>(result);
+                        if (response == null)
+                            throw new InvalidDataException("Ollama returned an empty chat response.");
                         if (it > MaxIterations)
                         {
                             Debug.LogError($"Stream has reached {MaxIterations} iterations... Probably server error?");
@@ -109,12 +164,12 @@ namespace ollama
                 }
 
                 Debug.LogError($"HTTP Error during \"{endpoint}\" PostRequest:\n{webEx.Message}\n{errorResponse}\n{webEx.StackTrace}");
-                return;
+                throw;
             }
             catch (Exception e)
             {
                 Debug.LogError($"Error during \"{endpoint}\" PostRequestStream:\n{e.Message}\n{e.StackTrace}");
-                return;
+                throw;
             }
         }
 
@@ -124,15 +179,16 @@ namespace ollama
 
             try
             {
-                httpWebRequest = (HttpWebRequest)WebRequest.Create($"{SERVER}{endpoint}");
-                httpWebRequest.ContentType = "application/json";
-                httpWebRequest.Method = "GET";
+                httpWebRequest = CreateRequest($"{SERVER}{endpoint}", "GET");
 
                 string result;
 
-                using (var httpResponse = await httpWebRequest.GetResponseAsync().ConfigureAwait(false))
+                using (var httpResponse = await WaitForRequestAsync(
+                           httpWebRequest.GetResponseAsync(), httpWebRequest,
+                           RequestTimeoutMilliseconds, "response").ConfigureAwait(false))
                 using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
-                    result = await streamReader.ReadToEndAsync().ConfigureAwait(false);
+                    result = await WaitForRequestAsync(streamReader.ReadToEndAsync(), httpWebRequest,
+                        ReadWriteTimeoutMilliseconds, "response body").ConfigureAwait(false);
 
                 return JsonConvert.DeserializeObject<T>(result);
             }

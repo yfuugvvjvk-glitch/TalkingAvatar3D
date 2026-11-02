@@ -48,7 +48,6 @@ public class AvatarVisemeAnimator : MonoBehaviour
     // ── Ochi ─────────────────────────────────────────────────────────────────
     private Transform leftEyeBone;   private Quaternion leftEyeRestRot;
     private Transform rightEyeBone;  private Quaternion rightEyeRestRot;
-    private float eyeBlinkTimer;
     private float eyeLookTimer;
     private Vector2 eyeLookTarget; // unghi Y, X pentru privire
 
@@ -84,6 +83,8 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     private string actionStatus = string.Empty;
     public  string ActionStatus => actionStatus;
+    public  Transform HeadBone  => headBone;
+    public  Transform AvatarRoot => avatarRoot;
     public bool IsPerformingAction => walkActive || pushUpActive || waveActive || raiseActive ||
         swimActive || jumpActive || headRotActive || danceActive || moveActive;
 
@@ -135,56 +136,57 @@ public class AvatarVisemeAnimator : MonoBehaviour
 
     public bool StartWalking(int steps)
     {
-        if (avatarRoot == null) return false;
+        if (avatarRoot == null || IsPerformingAction) return false;
         StopAll(); walkSteps = Mathf.Clamp(steps,1,50); walkStart = Time.time; walkActive = true;
         actionStatus = $"Mers: {walkSteps} pasi..."; return true;
     }
 
     public bool StartPushUps(int reps)
     {
-        if (avatarRoot == null) return false;
+        if (avatarRoot == null || IsPerformingAction) return false;
         StopAll(); pushUpReps = Mathf.Clamp(reps,1,20); pushUpStart = Time.time; pushUpActive = true;
         actionStatus = $"Flotari: {pushUpReps}..."; return true;
     }
 
     public bool StartWaving()
     {
-        if (avatarRoot == null || rightArmBone == null) return false;
+        if (avatarRoot == null || rightArmBone == null || IsPerformingAction) return false;
         StopAll(); waveStart = Time.time; waveActive = true;
         actionStatus = "Salut!"; return true;
     }
 
     public bool StartRaisingArms()
     {
-        if (avatarRoot == null || leftArmBone == null || rightArmBone == null) return false;
+        if (avatarRoot == null || leftArmBone == null || rightArmBone == null ||
+            IsPerformingAction) return false;
         StopAll(); raiseStart = Time.time; raiseActive = true;
         actionStatus = "Ridica brate!"; return true;
     }
 
     public bool StartSwimming(int seconds)
     {
-        if (avatarRoot == null || leftArmBone == null) return false;
+        if (avatarRoot == null || leftArmBone == null || IsPerformingAction) return false;
         StopAll(); swimDur = Mathf.Clamp(seconds,1,30); swimStart = Time.time; swimActive = true;
         actionStatus = $"Inot {seconds}s..."; return true;
     }
 
     public bool StartJumping(int reps)
     {
-        if (avatarRoot == null) return false;
+        if (avatarRoot == null || IsPerformingAction) return false;
         StopAll(); jumpReps = Mathf.Clamp(reps,1,20); jumpStart = Time.time; jumpActive = true;
         actionStatus = $"Saritura x{jumpReps}..."; return true;
     }
 
     public bool StartHeadRotation(float angle, float speed)
     {
-        if (headBone == null) return false;
+        if (headBone == null || IsPerformingAction) return false;
         StopAll(); headRotAngle = angle; headRotStart = Time.time; headRotActive = true;
         actionStatus = "Rotire cap..."; return true;
     }
 
     public bool StartDancing()
     {
-        if (avatarRoot == null) return false;
+        if (avatarRoot == null || IsPerformingAction) return false;
         StopAll(); danceStart = Time.time; danceActive = true;
         actionStatus = "Dans!"; return true;
     }
@@ -232,11 +234,10 @@ public class AvatarVisemeAnimator : MonoBehaviour
         // ── Lip-sync: rotire Head pe X ────────────────────────────────────
         if (headBone != null && !headRotActive)
         {
-            float jaw = speaking ? VisemeToAngle(GetVisemeAt(elapsed)) : 0f;
-            jawCurrent = Mathf.Lerp(jawCurrent, jaw, Time.deltaTime * blendSpeed * 2.5f);
-            float nod  = speaking ? Mathf.Sin(elapsed * 2.5f) * 1.0f : 0f;
+            jawCurrent = Mathf.Lerp(jawCurrent, 0f, Time.deltaTime * blendSpeed * 2.5f);
+            float nod = speaking ? Mathf.Sin(elapsed * 2.5f) * 0.35f : 0f;
             headBone.localRotation = Quaternion.Slerp(headBone.localRotation,
-                headRestRot * Quaternion.Euler(jawCurrent + nod, 0f, 0f),
+                headRestRot * Quaternion.Euler(nod, 0f, 0f),
                 Time.deltaTime * blendSpeed * 2f);
         }
 
@@ -374,15 +375,15 @@ public class AvatarVisemeAnimator : MonoBehaviour
         if (InputBlocked) return;
 
         // ── Rotire cu sagetile stanga/dreapta ─────────────────────────────
-        if (kb.leftArrowKey.isPressed)
+        if (kb.leftArrowKey.isPressed || kb.aKey.isPressed)
             avatarRoot.parent.Rotate(Vector3.up, -120f * Time.deltaTime, Space.World);
-        if (kb.rightArrowKey.isPressed)
+        if (kb.rightArrowKey.isPressed || kb.dKey.isPressed)
             avatarRoot.parent.Rotate(Vector3.up,  120f * Time.deltaTime, Space.World);
 
         // ── Mers inainte/inapoi cu sagetile sus/jos ───────────────────────
         float fwd = 0f;
-        if (kb.upArrowKey.isPressed)   fwd =  1f;
-        if (kb.downArrowKey.isPressed) fwd = -1f;
+        if (kb.upArrowKey.isPressed || kb.wKey.isPressed)   fwd =  1f;
+        if (kb.downArrowKey.isPressed || kb.sKey.isPressed) fwd = -1f;
 
         if (fwd != 0f && !pushUpActive && !swimActive)
         {

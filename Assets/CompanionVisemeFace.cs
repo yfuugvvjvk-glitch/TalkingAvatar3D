@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -5,42 +6,51 @@ using UnityEngine.InputSystem;
 public class CompanionVisemeFace : MonoBehaviour
 {
     private const float FaceDistance = 2.8f;
+    private const float FaceViewportHeight = 0.48f;
+    private const float VisemeWeightScale = 0.04f;
+
+    private sealed class BlendShapeTarget
+    {
+        public SkinnedMeshRenderer renderer;
+        public int index;
+        public string name;
+        public float currentWeight;
+        public float targetWeight;
+    }
 
     private readonly List<VisemeFrame> timeline = new List<VisemeFrame>();
+    private readonly List<BlendShapeTarget> headBlendShapes = new List<BlendShapeTarget>();
+    private readonly List<BlendShapeTarget> teethBlendShapes = new List<BlendShapeTarget>();
     private Camera targetCamera;
     private Transform faceRoot;
-    private Transform mouth;
-    private Transform upperLip;
-    private Transform lowerLip;
-    private Transform mouthOpening;
-    private Transform teeth;
-    private Material headMaterial;
-    private Material eyeMaterial;
-    private Material pupilMaterial;
-    private Material lipMaterial;
-    private Material mouthMaterial;
-    private Material teethMaterial;
-    private Vector3 baseLocalPosition;
+    private Transform headBone;
+    private Quaternion headRestRotation;
+    private SkinnedMeshRenderer headRenderer;
+    private Renderer[] visibleHeadRenderers;
     private float viewportX = 0.19f;
     private float viewportY = 0.54f;
     private float speechStartedAt;
     private float speechDuration;
-    private Vector3 mouthScale = new Vector3(1f, 0.2f, 1f);
-    private bool showTeeth;
+    private bool headSized;
     public bool InputBlocked { get; set; }
 
-    public void Initialize(Camera cameraToUse)
+    public void Initialize(Camera cameraToUse, Transform sourceAvatar)
     {
         if (cameraToUse == null)
         {
-            Debug.LogError("Fața vorbitoare nu poate fi creată fără o cameră.");
+            Debug.LogError("[CompanionVisemeFace] Nu poate fi creat fără o cameră.");
             return;
         }
+        if (sourceAvatar == null)
+        {
+            Debug.LogError("[CompanionVisemeFace] Avatarul sursă nu este disponibil.");
+            return;
+        }
+        if (faceRoot != null)
+            return;
 
         targetCamera = cameraToUse;
-        CreateMaterials();
-        CreateFace();
-        UpdatePosition();
+        CreateAvatarHead(sourceAvatar);
     }
 
     public void PlaySpeech(string text, float duration, string language, string rhubarbJson)
@@ -62,143 +72,252 @@ public class CompanionVisemeFace : MonoBehaviour
         UpdatePosition();
     }
 
-    private void CreateMaterials()
+    private void CreateAvatarHead(Transform sourceAvatar)
     {
-        headMaterial  = CreateMaterial(new Color(0.98f, 0.72f, 0.43f));
-        eyeMaterial   = CreateMaterial(Color.white);
-        pupilMaterial = CreateMaterial(new Color(0.04f, 0.07f, 0.12f));
-        lipMaterial   = CreateMaterial(new Color(0.78f, 0.08f, 0.18f));
-        mouthMaterial = CreateMaterial(new Color(0.08f, 0.01f, 0.025f));
-        teethMaterial = CreateMaterial(new Color(1f, 1f, 0.94f));
-    }
-
-    private static Material CreateMaterial(Color color)
-    {
-        // Încearcă shaderele URP în ordine, cu fallback garantat la Sprites/Default
-        // care este întotdeauna inclus în build indiferent de pipeline
-        string[] candidates = new[]
-        {
-            "Universal Render Pipeline/Unlit",
-            "Universal Render Pipeline/Lit",
-            "Unlit/Color",
-            "Sprites/Default",
-        };
-
-        Shader shader = null;
-        foreach (string name in candidates)
-        {
-            shader = Shader.Find(name);
-            if (shader != null) break;
-        }
-
-        if (shader == null)
-        {
-            // Ultimul fallback: shader-ul default al Unity, garantat prezent
-            shader = Shader.Find("Hidden/InternalErrorShader");
-            Debug.LogWarning("[CompanionVisemeFace] Nu s-a găsit niciun shader compatibil.");
-        }
-
-        Material material = new Material(shader);
-
-        // Setează culoarea — URP folosește _BaseColor, pipeline clasic folosește _Color
-        if (material.HasProperty("_BaseColor"))
-            material.SetColor("_BaseColor", color);
-        if (material.HasProperty("_Color"))
-            material.SetColor("_Color", color);
-
-        return material;
-    }
-
-    private void CreateFace()
-    {
-        faceRoot = new GameObject("Companion Speech Face").transform;
+        GameObject clone = Instantiate(sourceAvatar.gameObject);
+        clone.name = "Companion Avatar Head";
+        faceRoot = clone.transform;
         faceRoot.SetParent(targetCamera.transform, false);
-        faceRoot.localScale = Vector3.one * 0.72f;
+        faceRoot.localPosition = Vector3.zero;
+        faceRoot.localRotation = Quaternion.Euler(0f, 180f, 0f);
+        faceRoot.localScale = sourceAvatar.localScale;
 
-        CreateSphere("Head", faceRoot, Vector3.zero, new Vector3(1f, 1f, 1f), headMaterial);
-
-        for (int side = -1; side <= 1; side += 2)
+        var visibleRenderers = new List<Renderer>();
+        foreach (Renderer renderer in faceRoot.GetComponentsInChildren<Renderer>(true))
         {
-            float x = side * 0.14f;
-            CreateSphere("Eye", faceRoot, new Vector3(x, 0.09f, -0.62f),
-                new Vector3(0.17f, 0.2f, 0.08f), eyeMaterial);
-            CreateSphere("Pupil", faceRoot, new Vector3(x, 0.085f, -0.72f),
-                new Vector3(0.075f, 0.1f, 0.04f), pupilMaterial);
-            CreateSphere("Eye Highlight", faceRoot, new Vector3(x - 0.02f, 0.11f, -0.77f),
-                new Vector3(0.03f, 0.035f, 0.018f), teethMaterial);
+            string rendererName = renderer.gameObject.name;
+            bool isHeadPart =
+                rendererName.Equals("AvatarHead", StringComparison.OrdinalIgnoreCase) ||
+                rendererName.Equals("AvatarEyelashes", StringComparison.OrdinalIgnoreCase) ||
+                rendererName.Equals("AvatarLeftEyeball", StringComparison.OrdinalIgnoreCase) ||
+                rendererName.Equals("AvatarRightEyeball", StringComparison.OrdinalIgnoreCase) ||
+                rendererName.Equals("AvatarTeethLower", StringComparison.OrdinalIgnoreCase) ||
+                rendererName.Equals("AvatarTeethUpper", StringComparison.OrdinalIgnoreCase);
+            renderer.enabled = isHeadPart;
+            if (isHeadPart)
+                visibleRenderers.Add(renderer);
+            if (rendererName.Equals("AvatarHead", StringComparison.OrdinalIgnoreCase))
+                headRenderer = renderer as SkinnedMeshRenderer;
         }
 
-        mouth = new GameObject("Articulating Mouth").transform;
-        mouth.SetParent(faceRoot, false);
-        mouth.localPosition = new Vector3(0f, -0.16f, -0.62f);
+        if (headRenderer == null || visibleRenderers.Count == 0)
+        {
+            Destroy(faceRoot.gameObject);
+            faceRoot = null;
+            Debug.LogError("[CompanionVisemeFace] Mesh-ul capului avatarului nu a fost găsit.");
+            return;
+        }
 
-        upperLip = CreateSphere("Upper Lip", mouth, new Vector3(0f, 0.035f, -0.07f),
-            new Vector3(0.48f, 0.09f, 0.07f), lipMaterial);
-        lowerLip = CreateSphere("Lower Lip", mouth, new Vector3(0f, -0.035f, -0.07f),
-            new Vector3(0.48f, 0.09f, 0.07f), lipMaterial);
-        mouthOpening = CreateSphere("Mouth Opening", mouth, new Vector3(0f, 0f, -0.13f),
-            new Vector3(0.36f, 0.03f, 0.04f), mouthMaterial);
-        teeth = CreateSphere("Teeth", mouth, new Vector3(0f, 0.025f, -0.18f),
-            new Vector3(0.22f, 0.055f, 0.025f), teethMaterial);
-        teeth.gameObject.SetActive(false);
+        visibleHeadRenderers = visibleRenderers.ToArray();
+        headBone = FindHeadBone(faceRoot);
+        if (headBone != null)
+            headRestRotation = headBone.localRotation;
+
+        CacheBlendShapes(headRenderer, headBlendShapes);
+        foreach (Renderer renderer in visibleHeadRenderers)
+        {
+            if (!renderer.gameObject.name.Equals("AvatarTeethLower",
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (renderer is SkinnedMeshRenderer skinnedRenderer)
+                CacheBlendShapes(skinnedRenderer, teethBlendShapes);
+        }
+
+        if (headBlendShapes.Count == 0)
+            Debug.LogError("[CompanionVisemeFace] Mesh-ul capului nu conține blendshape-uri.");
+
+        UpdatePosition();
     }
 
-    private static Transform CreateSphere(string objectName, Transform parent,
-        Vector3 localPosition, Vector3 localScale, Material material)
+    private static Transform FindHeadBone(Transform root)
     {
-        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        sphere.name = objectName;
-        sphere.transform.SetParent(parent, false);
-        sphere.transform.localPosition = localPosition;
-        sphere.transform.localScale = localScale;
+        foreach (Transform candidate in root.GetComponentsInChildren<Transform>(true))
+            if (candidate.name.Equals("Head", StringComparison.OrdinalIgnoreCase) &&
+                candidate.GetComponent<SkinnedMeshRenderer>() == null)
+                return candidate;
+        return null;
+    }
 
-        Collider collider = sphere.GetComponent<Collider>();
-        if (collider != null) Destroy(collider);
+    private static void CacheBlendShapes(
+        SkinnedMeshRenderer renderer,
+        List<BlendShapeTarget> destination)
+    {
+        if (renderer == null || renderer.sharedMesh == null)
+            return;
 
-        Renderer renderer = sphere.GetComponent<Renderer>();
-        renderer.sharedMaterial = material;
-        return sphere.transform;
+        for (int i = 0; i < renderer.sharedMesh.blendShapeCount; i++)
+        {
+            destination.Add(new BlendShapeTarget
+            {
+                renderer = renderer,
+                index = i,
+                name = renderer.sharedMesh.GetBlendShapeName(i),
+                currentWeight = renderer.GetBlendShapeWeight(i),
+                targetWeight = 0f
+            });
+        }
     }
 
     private void Update()
     {
-        if (faceRoot == null) return;
+        if (faceRoot == null)
+            return;
 
         HandlePositionInput();
-
         float elapsed = Time.time - speechStartedAt;
         bool speaking = elapsed < speechDuration && timeline.Count > 0;
-        Vector3 targetMouthScale = speaking
-            ? GetMouthScale(GetVisemeAt(elapsed))
-            : new Vector3(1f, 0.2f, 1f);
+        AvatarViseme viseme = speaking ? GetVisemeAt(elapsed) : AvatarViseme.Rest;
 
-        mouthScale = Vector3.Lerp(mouthScale, targetMouthScale,
-            Time.deltaTime * 16f);
-        float lipSeparation = 0.06f * mouthScale.y;
-        upperLip.localPosition = new Vector3(0f, lipSeparation, -0.07f);
-        lowerLip.localPosition = new Vector3(0f, -lipSeparation, -0.07f);
-        upperLip.localScale = new Vector3(0.48f * mouthScale.x, 0.09f, 0.07f);
-        lowerLip.localScale = new Vector3(0.48f * mouthScale.x, 0.09f, 0.07f);
-        mouthOpening.localScale = new Vector3(
-            0.36f * mouthScale.x, 0.14f * mouthScale.y, 0.04f);
-        teeth.localPosition = new Vector3(0f, 0.025f * mouthScale.y, -0.18f);
-        bool targetTeeth = speaking && HasVisibleTeeth(GetVisemeAt(elapsed));
-        if (targetTeeth != showTeeth)
+        foreach (BlendShapeTarget shape in headBlendShapes)
+            shape.targetWeight = 0f;
+        foreach (BlendShapeTarget shape in teethBlendShapes)
+            shape.targetWeight = 0f;
+
+        ApplyHeadViseme(viseme);
+        ApplyJawViseme(viseme);
+        AnimateBlendShapes(headBlendShapes);
+        AnimateBlendShapes(teethBlendShapes);
+
+        if (headBone != null)
         {
-            showTeeth = targetTeeth;
-            teeth.gameObject.SetActive(showTeeth);
+            float nod = speaking ? Mathf.Sin(elapsed * 3f) * 0.6f : 0f;
+            headBone.localRotation = Quaternion.Slerp(
+                headBone.localRotation,
+                headRestRotation * Quaternion.Euler(nod, 0f, 0f),
+                Time.deltaTime * 10f);
         }
 
-        float bob = speaking ? Mathf.Sin(elapsed * 4f) * 0.025f : 0f;
-        faceRoot.localPosition = baseLocalPosition + Vector3.up * bob;
+        float bob = speaking ? Mathf.Sin(elapsed * 4f) * 0.015f : 0f;
+        Vector3 localPosition = faceRoot.localPosition;
+        localPosition.y = basePositionY + bob;
+        faceRoot.localPosition = localPosition;
+    }
+
+    private float basePositionY;
+
+    private void ApplyHeadViseme(AvatarViseme viseme)
+    {
+        switch (viseme)
+        {
+            case AvatarViseme.OpenRound:
+            case AvatarViseme.RhubarbA:
+                SetShape(headBlendShapes, "jawOpen", 8f);
+                SetShape(headBlendShapes, "mouthFunnel", 12f);
+                break;
+            case AvatarViseme.RhubarbD:
+                SetShape(headBlendShapes, "jawOpen", 5f);
+                SetShape(headBlendShapes, "mouthFunnel", 8f);
+                break;
+            case AvatarViseme.MidSpread:
+            case AvatarViseme.RhubarbC:
+                SetShape(headBlendShapes, "ih", 4.2f);
+                SetShape(headBlendShapes, "mouthSmileLeft", 8f);
+                SetShape(headBlendShapes, "mouthSmileRight", 8f);
+                SetShape(headBlendShapes, "jawOpen", 4f);
+                break;
+            case AvatarViseme.RhubarbE:
+                SetShape(headBlendShapes, "E", 4.2f);
+                SetShape(headBlendShapes, "mouthSmileLeft", 7f);
+                SetShape(headBlendShapes, "mouthSmileRight", 7f);
+                SetShape(headBlendShapes, "jawOpen", 3f);
+                break;
+            case AvatarViseme.Closed:
+            case AvatarViseme.RhubarbB:
+                SetShape(headBlendShapes, "PP", 18f);
+                SetShape(headBlendShapes, "mouthClose", 8f);
+                break;
+            case AvatarViseme.TeethOnLip:
+            case AvatarViseme.RhubarbF:
+                SetShape(headBlendShapes, "mouthShrugLower", 8f);
+                break;
+            case AvatarViseme.RhubarbTh:
+                SetShape(headBlendShapes, "TH", 45f);
+                break;
+            case AvatarViseme.Pucker:
+            case AvatarViseme.RhubarbH:
+                SetShape(headBlendShapes, "ou", 48f);
+                SetShape(headBlendShapes, "mouthPucker", 20f);
+                break;
+            case AvatarViseme.RhubarbDd:
+                SetShape(headBlendShapes, "DD", 38f);
+                ApplyAlveolarViseme();
+                break;
+            case AvatarViseme.RhubarbNn:
+                SetShape(headBlendShapes, "nn", 38f);
+                ApplyAlveolarViseme();
+                break;
+            case AvatarViseme.RhubarbSs:
+                SetShape(headBlendShapes, "SS", 42f);
+                ApplyAlveolarViseme();
+                break;
+            case AvatarViseme.RhubarbCh:
+                SetShape(headBlendShapes, "CH", 42f);
+                break;
+            case AvatarViseme.RhubarbRr:
+                SetShape(headBlendShapes, "RR", 38f);
+                break;
+            case AvatarViseme.RhubarbKk:
+            case AvatarViseme.RhubarbG:
+                SetShape(headBlendShapes, "kk", 38f);
+                break;
+            case AvatarViseme.Consonant:
+                ApplyAlveolarViseme();
+                break;
+        }
+    }
+
+    private void ApplyAlveolarViseme()
+    {
+        SetShape(headBlendShapes, "mouthStretchLeft", 8f);
+        SetShape(headBlendShapes, "mouthStretchRight", 8f);
+        SetShape(headBlendShapes, "jawOpen", 2f);
+    }
+
+    private void ApplyJawViseme(AvatarViseme viseme)
+    {
+        float jawWeight = viseme == AvatarViseme.OpenRound ||
+                          viseme == AvatarViseme.RhubarbA ? 8f :
+                          viseme == AvatarViseme.RhubarbD ? 5f :
+                          viseme == AvatarViseme.MidSpread ||
+                          viseme == AvatarViseme.RhubarbC ? 4f :
+                          viseme == AvatarViseme.RhubarbE ||
+                          viseme == AvatarViseme.RhubarbNn ||
+                          viseme == AvatarViseme.RhubarbSs ||
+                          viseme == AvatarViseme.RhubarbDd ? 2f :
+                          viseme == AvatarViseme.Consonant ||
+                          viseme == AvatarViseme.RhubarbF ? 2f : 0f;
+        SetShape(teethBlendShapes, "jawOpen", jawWeight);
+    }
+
+    private static void SetShape(
+        List<BlendShapeTarget> shapes, string shapeName, float weight)
+    {
+        foreach (BlendShapeTarget shape in shapes)
+            if (shape.name.Equals(shapeName, StringComparison.OrdinalIgnoreCase))
+                shape.targetWeight = weight * VisemeWeightScale;
+    }
+
+    private static void AnimateBlendShapes(List<BlendShapeTarget> shapes)
+    {
+        float blend = Time.deltaTime * 14f;
+        foreach (BlendShapeTarget shape in shapes)
+        {
+            if (shape.renderer == null)
+                continue;
+            shape.currentWeight = Mathf.Lerp(
+                shape.currentWeight, shape.targetWeight, blend);
+            shape.renderer.SetBlendShapeWeight(shape.index, shape.currentWeight);
+        }
     }
 
     private void HandlePositionInput()
     {
-        if (InputBlocked) return;
+        if (InputBlocked)
+            return;
 
         Keyboard keyboard = Keyboard.current;
-        if (keyboard == null) return;
+        if (keyboard == null)
+            return;
 
         if (keyboard.jKey.wasPressedThisFrame) Move(-0.04f, 0f);
         if (keyboard.lKey.wasPressedThisFrame) Move(0.04f, 0f);
@@ -217,79 +336,37 @@ public class CompanionVisemeFace : MonoBehaviour
             : AvatarViseme.Rest;
     }
 
-    private static Vector3 GetMouthScale(AvatarViseme viseme)
-    {
-        switch (viseme)
-        {
-            case AvatarViseme.OpenRound:
-            case AvatarViseme.RhubarbA:
-            case AvatarViseme.RhubarbD:
-                return new Vector3(0.88f, 1.4f, 1f);
-            case AvatarViseme.MidSpread:
-            case AvatarViseme.RhubarbC:
-            case AvatarViseme.RhubarbE:
-                return new Vector3(1.35f, 0.85f, 1f);
-            case AvatarViseme.Closed:
-            case AvatarViseme.RhubarbB:
-                return new Vector3(1f, 0.08f, 1f);
-            case AvatarViseme.TeethOnLip:
-            case AvatarViseme.RhubarbF:
-            case AvatarViseme.RhubarbTh:
-                return new Vector3(0.92f, 0.48f, 1f);
-            case AvatarViseme.Pucker:
-            case AvatarViseme.RhubarbH:
-                return new Vector3(0.58f, 0.85f, 1f);
-            case AvatarViseme.RhubarbDd:
-            case AvatarViseme.RhubarbNn:
-            case AvatarViseme.RhubarbSs:
-            case AvatarViseme.RhubarbCh:
-                return new Vector3(1.25f, 0.42f, 1f);
-            case AvatarViseme.RhubarbRr:
-            case AvatarViseme.RhubarbKk:
-            case AvatarViseme.RhubarbG:
-            case AvatarViseme.Consonant:
-                return new Vector3(0.9f, 0.55f, 1f);
-            default:
-                return new Vector3(1f, 0.2f, 1f);
-        }
-    }
-
-    private static bool HasVisibleTeeth(AvatarViseme viseme)
-    {
-        return viseme == AvatarViseme.MidSpread ||
-               viseme == AvatarViseme.RhubarbC ||
-               viseme == AvatarViseme.RhubarbE ||
-               viseme == AvatarViseme.TeethOnLip ||
-               viseme == AvatarViseme.RhubarbF ||
-               viseme == AvatarViseme.RhubarbTh ||
-               viseme == AvatarViseme.RhubarbDd ||
-               viseme == AvatarViseme.RhubarbNn ||
-               viseme == AvatarViseme.RhubarbSs ||
-               viseme == AvatarViseme.RhubarbCh;
-    }
-
     private void UpdatePosition()
     {
-        if (targetCamera == null || faceRoot == null) return;
+        if (targetCamera == null || faceRoot == null || visibleHeadRenderers == null)
+            return;
 
-        Vector3 worldPosition = targetCamera.ViewportToWorldPoint(
+        Bounds bounds = visibleHeadRenderers[0].bounds;
+        for (int i = 1; i < visibleHeadRenderers.Length; i++)
+            bounds.Encapsulate(visibleHeadRenderers[i].bounds);
+
+        float viewHeight = 2f * FaceDistance *
+            Mathf.Tan(targetCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
+        float desiredHeight = viewHeight * FaceViewportHeight;
+        if (!headSized && bounds.size.y > 0.0001f)
+        {
+            faceRoot.localScale *= desiredHeight / bounds.size.y;
+            headSized = true;
+        }
+
+        bounds = visibleHeadRenderers[0].bounds;
+        for (int i = 1; i < visibleHeadRenderers.Length; i++)
+            bounds.Encapsulate(visibleHeadRenderers[i].bounds);
+
+        Vector3 targetCenter = targetCamera.ViewportToWorldPoint(
             new Vector3(viewportX, viewportY, FaceDistance));
-        baseLocalPosition = targetCamera.transform.InverseTransformPoint(worldPosition);
-        faceRoot.localPosition = baseLocalPosition;
+        faceRoot.position += targetCenter - bounds.center;
+        basePositionY = faceRoot.localPosition.y;
     }
 
     private void OnDestroy()
     {
-        DestroyMaterial(headMaterial);
-        DestroyMaterial(eyeMaterial);
-        DestroyMaterial(pupilMaterial);
-        DestroyMaterial(lipMaterial);
-        DestroyMaterial(mouthMaterial);
-        DestroyMaterial(teethMaterial);
-    }
-
-    private static void DestroyMaterial(Material material)
-    {
-        if (material != null) Destroy(material);
+        if (faceRoot != null)
+            Destroy(faceRoot.gameObject);
     }
 }
